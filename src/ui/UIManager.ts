@@ -25,6 +25,7 @@ export class UIManager {
   onReset?: () => void;
   onDeleteBody?: (id: string) => void;
   onRealTimeToggle?: (enabled: boolean) => void;
+  onGodModeToggle?: (active: boolean) => void;
 
   // Real-time proxy — shared with Tweakpane binding
   private realTimeProxy = { enabled: false };
@@ -165,7 +166,9 @@ export class UIManager {
     page.addBlade({ view: 'separator' });
 
     page.addButton({ title: '⚡ God Mode (G)' }).on('click', () => {
-      this.bodySelector.setGodMode(!this.bodySelector.isGodMode());
+      const nowActive = !this.bodySelector.isGodMode();
+      this.bodySelector.setGodMode(nowActive);
+      this.onGodModeToggle?.(nowActive);
     });
   }
 
@@ -355,9 +358,12 @@ export class UIManager {
         case 't': case 'T':
           this.renderConfig.showTrails = !this.renderConfig.showTrails;
           break;
-        case 'g': case 'G':
-          this.bodySelector.setGodMode(!this.bodySelector.isGodMode());
+        case 'g': case 'G': {
+          const nowActive = !this.bodySelector.isGodMode();
+          this.bodySelector.setGodMode(nowActive);
+          this.onGodModeToggle?.(nowActive);
           break;
+        }
         case 'b': case 'B':
           this.renderConfig.showBloom = !this.renderConfig.showBloom;
           this.sceneManager.applyRenderConfig(this.renderConfig);
@@ -368,6 +374,7 @@ export class UIManager {
         case 'Escape':
           this.bodySelector.deselectBody();
           this.bodySelector.setGodMode(false);
+          this.onGodModeToggle?.(false);
           break;
       }
       this.pane.refresh();

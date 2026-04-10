@@ -11,6 +11,7 @@ import { TrailRenderer } from './rendering/TrailRenderer';
 import { BodySelector } from './ui/BodySelector';
 import { UIManager } from './ui/UIManager';
 import { DateOverlay } from './ui/DateOverlay';
+import { SpawnPanel } from './ui/SpawnPanel';
 
 // ---------------------------------------------------------------------------
 // Shared mutable state — all subsystems read from these objects each frame
@@ -110,7 +111,8 @@ const bodySelector = new BodySelector(
   scene,
   () => bodies,
   cameraConfig,
-  sceneManager
+  sceneManager,
+  () => renderConfig.logScale
 );
 
 bodySelector.onBodySelected = (body) => {
@@ -118,6 +120,47 @@ bodySelector.onBodySelected = (body) => {
     cameraConfig.focusBodyId = body.state.id;
     sceneManager.focusOn(body);
   }
+};
+
+// ---------------------------------------------------------------------------
+// Spawn panel (God Mode configuration)
+// ---------------------------------------------------------------------------
+const spawnPanel = new SpawnPanel(scene, simConfig.G);
+
+bodySelector.onGodModeClick = (scenePos, physicsPos) => {
+  spawnPanel.updateG(simConfig.G);
+  spawnPanel.open(scenePos, physicsPos, bodies);
+};
+
+spawnPanel.onSpawn = (req) => {
+  const id = nextBodyId();
+  const state = {
+    id,
+    name: req.name,
+    mass: req.mass,
+    radius: req.radius,
+    position: req.position.clone(),
+    velocity: req.velocity.clone(),
+    acceleration: new THREE.Vector3(),
+    color: req.color,
+    texturePath: null,
+    nightTexturePath: null,
+    isEmissive: req.isEmissive,
+    hasRings: false,
+    hasAtmosphere: false,
+    trailColor: req.color,
+    isMoon: false,
+    parentId: null,
+  };
+
+  const newBody = new CelestialBody(state, textureLoader, scene);
+  const trail   = trailRenderer.create(id, req.color);
+  newBody.trail  = trail;
+
+  physics.addBody(newBody);
+  bodies = physics.bodies;
+  sceneManager.clearLabels();
+  buildAllLabels();
 };
 
 // ---------------------------------------------------------------------------
@@ -143,6 +186,10 @@ const ui = new UIManager(
   physics, sceneManager, bodySelector,
   () => bodies
 );
+
+ui.onGodModeToggle = (active) => {
+  if (!active) spawnPanel.close();
+};
 
 // ---------------------------------------------------------------------------
 // Date overlay (persistent date display + date picker)
@@ -402,38 +449,7 @@ function animate(): void {
     sceneManager.updateLagrangePoints(null, null);
   }
 
-  // --- God Mode spawn ---
-  if (bodySelector.pendingSpawn) {
-    const req = bodySelector.pendingSpawn;
-    bodySelector.pendingSpawn = null;
-
-    const id = nextBodyId();
-    const state = {
-      id,
-      name: `Object ${id}`,
-      mass: req.mass,
-      radius: req.radius,
-      position: req.position.clone(),
-      velocity: req.velocity.clone(),
-      acceleration: new THREE.Vector3(),
-      color: req.color,
-      texturePath: null,
-      nightTexturePath: null,
-      isEmissive: false,
-      hasRings: false,
-      hasAtmosphere: false,
-      trailColor: req.color,
-      isMoon: false,
-      parentId: null,
-    };
-
-    const newBody = new CelestialBody(state, textureLoader, scene);
-    const trail   = trailRenderer.create(id, req.color);
-    newBody.trail = trail;
-
-    physics.addBody(newBody);
-    bodies = physics.bodies;
-  }
+  // (God Mode spawn is handled by SpawnPanel callback)
 
   // --- Selection ring ---
   bodySelector.update();

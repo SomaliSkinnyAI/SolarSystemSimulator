@@ -80,6 +80,167 @@
         border: 1px solid rgba(255, 200, 50, 0.3);
       }
 
+      /* --- Spawn panel (God Mode) --- */
+      #spawn-panel {
+        position: fixed;
+        left: 16px;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 260px;
+        background: rgba(10, 12, 20, 0.92);
+        border: 1px solid rgba(255, 200, 50, 0.25);
+        border-radius: 10px;
+        padding: 14px;
+        color: #ccc;
+        font-family: 'Courier New', monospace;
+        font-size: 11px;
+        z-index: 300;
+        display: none;
+        backdrop-filter: blur(10px);
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.7);
+      }
+      #spawn-panel.open { display: block; }
+      .spawn-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 10px;
+      }
+      .spawn-title {
+        color: rgba(255, 200, 50, 0.9);
+        font-size: 13px;
+        font-weight: bold;
+        letter-spacing: 1px;
+      }
+      .spawn-close {
+        background: none;
+        border: none;
+        color: rgba(255, 255, 255, 0.4);
+        font-size: 18px;
+        cursor: pointer;
+        padding: 0 4px;
+        line-height: 1;
+      }
+      .spawn-close:hover { color: #fff; }
+      .spawn-presets {
+        display: flex;
+        gap: 3px;
+        margin-bottom: 10px;
+      }
+      .spawn-preset-btn {
+        flex: 1;
+        padding: 5px 2px;
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 4px;
+        color: #999;
+        font-family: 'Courier New', monospace;
+        font-size: 9px;
+        cursor: pointer;
+        text-align: center;
+        transition: all 0.15s;
+      }
+      .spawn-preset-btn:hover {
+        background: rgba(255, 200, 50, 0.12);
+        border-color: rgba(255, 200, 50, 0.35);
+        color: #ddd;
+      }
+      .spawn-preset-btn.active {
+        background: rgba(255, 200, 50, 0.18);
+        border-color: rgba(255, 200, 50, 0.6);
+        color: #ffc832;
+      }
+      .spawn-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 6px;
+      }
+      .spawn-row label {
+        width: 70px;
+        flex-shrink: 0;
+        color: rgba(255, 255, 255, 0.45);
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+      .spawn-row input[type="range"] {
+        flex: 1;
+        height: 4px;
+        accent-color: rgba(255, 200, 50, 0.8);
+      }
+      .spawn-val {
+        width: 60px;
+        text-align: right;
+        font-size: 10px;
+        color: rgba(255, 255, 255, 0.65);
+      }
+      .spawn-row select,
+      .spawn-text-input,
+      .spawn-num-input {
+        flex: 1;
+        padding: 3px 6px;
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 4px;
+        color: #ddd;
+        font-family: 'Courier New', monospace;
+        font-size: 11px;
+        outline: none;
+      }
+      .spawn-row select:focus,
+      .spawn-text-input:focus,
+      .spawn-num-input:focus {
+        border-color: rgba(255, 200, 50, 0.4);
+      }
+      .spawn-row input[type="color"] {
+        width: 32px;
+        height: 24px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 4px;
+        background: none;
+        cursor: pointer;
+        padding: 0;
+      }
+      .spawn-divider {
+        height: 1px;
+        background: rgba(255, 255, 255, 0.08);
+        margin: 8px 0;
+      }
+      .spawn-info {
+        padding: 6px 0;
+        line-height: 1.6;
+        color: rgba(255, 255, 255, 0.55);
+        font-size: 10px;
+        min-height: 20px;
+      }
+      .spawn-info .info-label {
+        color: rgba(255, 200, 50, 0.6);
+      }
+      .spawn-info .info-hint {
+        color: rgba(255, 200, 50, 0.5);
+        font-style: italic;
+      }
+      .spawn-go-btn {
+        width: 100%;
+        padding: 8px;
+        margin-top: 4px;
+        background: rgba(255, 200, 50, 0.15);
+        border: 1px solid rgba(255, 200, 50, 0.4);
+        border-radius: 6px;
+        color: rgba(255, 200, 50, 0.9);
+        font-family: 'Courier New', monospace;
+        font-size: 12px;
+        font-weight: bold;
+        letter-spacing: 1px;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+      .spawn-go-btn:hover {
+        background: rgba(255, 200, 50, 0.25);
+        border-color: rgba(255, 200, 50, 0.7);
+      }
+
       /* --- Date overlay --- */
       #date-overlay {
         position: fixed;
@@ -321,7 +482,86 @@
       </div>
       <div class="picker-hint">JPL elements valid 1800 - 3000 AD</div>
     </div>
-    <div id="god-mode-hint">GOD MODE — Click to spawn body &bull; Drag to set velocity</div>
+    <!-- Spawn panel (God Mode) -->
+    <div id="spawn-panel">
+      <div class="spawn-header">
+        <span class="spawn-title">Spawn Body</span>
+        <button id="spawn-cancel-btn" class="spawn-close">&times;</button>
+      </div>
+      <div class="spawn-presets">
+        <button class="spawn-preset-btn" data-preset="asteroid">Asteroid</button>
+        <button class="spawn-preset-btn" data-preset="moon">Moon</button>
+        <button class="spawn-preset-btn active" data-preset="rocky">Planet</button>
+        <button class="spawn-preset-btn" data-preset="gas">Gas Giant</button>
+        <button class="spawn-preset-btn" data-preset="star">Star</button>
+      </div>
+      <div class="spawn-row">
+        <label>Name</label>
+        <input type="text" id="spawn-name" value="Planet" class="spawn-text-input">
+      </div>
+      <div class="spawn-row">
+        <label>Mass</label>
+        <input type="range" id="spawn-mass" min="12" max="32" step="0.1" value="24.8">
+        <span id="spawn-mass-val" class="spawn-val">6.0e24</span>
+      </div>
+      <div class="spawn-row">
+        <label>Radius</label>
+        <input type="range" id="spawn-radius" min="3" max="10" step="0.1" value="6.8">
+        <span id="spawn-radius-val" class="spawn-val">6.4e6</span>
+      </div>
+      <div class="spawn-row">
+        <label>Color</label>
+        <input type="color" id="spawn-color" value="#CC8844">
+      </div>
+      <div class="spawn-divider"></div>
+      <div class="spawn-row">
+        <label>Orbit</label>
+        <select id="spawn-orbit-target">
+          <option value="none">None (free)</option>
+          <option value="sun" selected>Sun</option>
+        </select>
+      </div>
+      <div class="spawn-row" id="spawn-orbit-type-field">
+        <label>Type</label>
+        <select id="spawn-orbit-type">
+          <option value="circular">Circular</option>
+          <option value="elliptical">Elliptical</option>
+          <option value="custom">Custom</option>
+        </select>
+      </div>
+      <div class="spawn-row" id="spawn-direction-field">
+        <label>Direction</label>
+        <select id="spawn-direction">
+          <option value="prograde">Prograde</option>
+          <option value="retrograde">Retrograde</option>
+        </select>
+      </div>
+      <div class="spawn-row" id="spawn-ecc-field" style="display:none">
+        <label>Eccentricity</label>
+        <input type="range" id="spawn-eccentricity" min="0" max="0.95" step="0.01" value="0">
+        <span id="spawn-ecc-val" class="spawn-val">0.00</span>
+      </div>
+      <div id="spawn-custom-vel" style="display:none">
+        <div class="spawn-row">
+          <label>Vx (km/s)</label>
+          <input type="number" id="spawn-vx" value="0" step="0.1" class="spawn-num-input">
+        </div>
+        <div class="spawn-row">
+          <label>Vy (km/s)</label>
+          <input type="number" id="spawn-vy" value="0" step="0.1" class="spawn-num-input">
+        </div>
+        <div class="spawn-row">
+          <label>Vz (km/s)</label>
+          <input type="number" id="spawn-vz" value="0" step="0.1" class="spawn-num-input">
+        </div>
+      </div>
+      <div id="spawn-orbit-info" class="spawn-info">
+        <span class="info-hint">Click in the scene to place body</span>
+      </div>
+      <button id="spawn-go-btn" class="spawn-go-btn">Spawn</button>
+    </div>
+
+    <div id="god-mode-hint">GOD MODE — Click in the scene to place a body</div>
     <div id="planet-card">
       <div class="card-accent"></div>
       <div class="card-header"></div>

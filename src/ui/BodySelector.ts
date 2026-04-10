@@ -1,11 +1,11 @@
 import * as THREE from 'three';
 import { CelestialBody } from '../physics/CelestialBody';
-import { SpawnRequest, CameraConfig } from '../types';
+import { CameraConfig } from '../types';
 import { SceneManager } from '../rendering/SceneManager';
 import { sceneToPhysics } from '../utils/CoordinateSystem';
 
 // ---------------------------------------------------------------------------
-// BodySelector — raycasting, selection ring, God Mode spawn
+// BodySelector — raycasting, selection ring, God Mode click-to-place
 // ---------------------------------------------------------------------------
 export class BodySelector {
   private camera: THREE.Camera;
@@ -14,6 +14,7 @@ export class BodySelector {
   private getBodies: () => CelestialBody[];
   private cameraConfig: CameraConfig;
   private sceneManager: SceneManager;
+  private getLogScale: () => boolean;
 
   private raycaster = new THREE.Raycaster();
   private mouse     = new THREE.Vector2();
@@ -25,17 +26,14 @@ export class BodySelector {
 
   // God Mode
   private godMode = false;
-  private dragStart: THREE.Vector3 | null = null;
-  private dragCurrent: THREE.Vector3 | null = null;
-  private velocityArrow: THREE.ArrowHelper | null = null;
   private eclipticPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  private _mouseDownPos: { x: number; y: number } | null = null;
 
   // Callbacks
   onBodySelected?: (body: CelestialBody | null) => void;
-  onSpawnRequested?: (req: SpawnRequest) => void;
 
-  // Pending spawn (resolved in main loop)
-  pendingSpawn: SpawnRequest | null = null;
+  /** Fires when the user clicks in God Mode. Passes scene + physics coords. */
+  onGodModeClick?: (scenePos: THREE.Vector3, physicsPos: THREE.Vector3) => void;
 
   constructor(
     camera: THREE.Camera,
@@ -43,7 +41,8 @@ export class BodySelector {
     scene: THREE.Scene,
     getBodies: () => CelestialBody[],
     cameraConfig: CameraConfig,
-    sceneManager: SceneManager
+    sceneManager: SceneManager,
+    getLogScale: () => boolean
   ) {
     this.camera       = camera;
     this.renderer     = renderer;
@@ -51,6 +50,7 @@ export class BodySelector {
     this.getBodies    = getBodies;
     this.cameraConfig = cameraConfig;
     this.sceneManager = sceneManager;
+    this.getLogScale  = getLogScale;
 
     // Selection ring
     const ringGeo = new THREE.RingGeometry(1, 1.08, 64);
@@ -70,7 +70,6 @@ export class BodySelector {
     renderer.domElement.addEventListener('click',     e => this._onClick(e));
     renderer.domElement.addEventListener('dblclick',  e => this._onDblClick(e));
     renderer.domElement.addEventListener('mousedown', e => this._onMouseDown(e));
-    renderer.domElement.addEventListener('mousemove', e => this._onMouseMove(e));
     renderer.domElement.addEventListener('mouseup',   e => this._onMouseUp(e));
   }
 
@@ -132,10 +131,10 @@ export class BodySelector {
   }
 
   // ---------------------------------------------------------------------------
-  // Click
+  // Click — body selection (non-God Mode)
   // ---------------------------------------------------------------------------
   private _onClick(e: MouseEvent): void {
-    if (this.godMode) return; // handled in mouseup
+    if (this.godMode) return; // handled in mouseUp
 
     const body = this._raycastBodies(e);
     if (body) {
@@ -161,70 +160,27 @@ export class BodySelector {
   }
 
   // ---------------------------------------------------------------------------
-  // God Mode mouse events
+  // God Mode — click-to-place (mouseDown/mouseUp with drag threshold)
   // ---------------------------------------------------------------------------
   private _onMouseDown(e: MouseEvent): void {
     if (!this.godMode || e.button !== 0) return;
-    const pt = this._raycastEcliptic(e);
-    if (!pt) return;
-    this.dragStart = pt.clone();
-    this.dragCurrent = pt.clone();
-  }
-
-  private _onMouseMove(e: MouseEvent): void {
-    if (!this.godMode || !this.dragStart) return;
-    const pt = this._raycastEcliptic(e);
-    if (!pt) return;
-    this.dragCurrent = pt.clone();
-
-    // Draw velocity arrow
-    if (this.velocityArrow) {
-      this.scene.remove(this.velocityArrow);
-      this.velocityArrow = null;
-    }
-    const dir = new THREE.Vector3().subVectors(pt, this.dragStart);
-    const len = dir.length();
-    if (len > 0.05) {
-      this.velocityArrow = new THREE.ArrowHelper(
-        dir.clone().normalize(),
-        this.dragStart,
-        len,
-        0xFFCC00,
-        len * 0.2,
-        len * 0.15
-      );
-      this.scene.add(this.velocityArrow);
-    }
+    this._mouseDownPos = { x: e.clientX, y: e.clientY };
   }
 
   private _onMouseUp(e: MouseEvent): void {
-    if (!this.godMode || e.button !== 0 || !this.dragStart) return;
+    if (!this.godMode || e.button !== 0 || !this._mouseDownPos) return;
 
-    const spawnPos  = this.dragStart.clone();
-    const spawnDrag = this.dragCurrent ?? spawnPos.clone();
+    // Only treat as a click if mouse didn't move more than 5px (not a camera drag)
+    const dx = e.clientX - this._mouseDownPos.x;
+    const dy = e.clientY - this._mouseDownPos.y;
+    this._mouseDownPos = null;
+    if (dx * dx + dy * dy > 25) return;
 
-    // Remove velocity arrow
-    if (this.velocityArrow) {
-      this.scene.remove(this.velocityArrow);
-      this.velocityArrow = null;
-    }
-    this.dragStart   = null;
-    this.dragCurrent = null;
+    const scenePos = this._raycastEcliptic(e);
+    if (!scenePos) return;
 
-    // Convert scene velocity to physics m/s
-    // Scale factor: 1 scene unit drag = ~200 km/s (tunable for feel)
-    const VELOCITY_SCALE = 2e8; // scene units → m/s multiplier
-    const sceneVel  = new THREE.Vector3().subVectors(spawnDrag, spawnPos).multiplyScalar(VELOCITY_SCALE);
-    const physicsPos = sceneToPhysics(spawnPos, false); // always linear for god mode
-    const physicsVel = sceneVel; // velocity scale is already in SI
-
-    this.pendingSpawn = {
-      position: physicsPos,
-      velocity: physicsVel,
-      mass:   1e26,
-      radius: 5e7,
-      color:  0x88CCFF,
-    };
+    const physicsPos = sceneToPhysics(scenePos, this.getLogScale());
+    this.onGodModeClick?.(scenePos, physicsPos);
   }
 
   // ---------------------------------------------------------------------------
@@ -232,18 +188,14 @@ export class BodySelector {
   // ---------------------------------------------------------------------------
   setGodMode(active: boolean): void {
     this.godMode = active;
-    const hint = document.getElementById('god-mode-hint')!;
+    const hint  = document.getElementById('god-mode-hint')!;
     const cross = document.getElementById('crosshair')!;
     hint.style.display  = active ? 'block' : 'none';
     cross.style.display = active ? 'block' : 'none';
     this.renderer.domElement.style.cursor = active ? 'crosshair' : '';
 
     if (!active) {
-      if (this.velocityArrow) {
-        this.scene.remove(this.velocityArrow);
-        this.velocityArrow = null;
-      }
-      this.dragStart = null;
+      this._mouseDownPos = null;
     }
   }
 
