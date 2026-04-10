@@ -101,6 +101,7 @@ const EARTH = orbitingBody({
   isMoon: false, parentId: null,
   rotationPeriod: 86164,     // 23h 56m 4s sidereal
   axialTilt: 0.4091,         // 23.44°
+  tiltAxisAngle: Math.PI,    // north pole projects toward ecliptic lon 90° (sim -Z)
 });
 
 const MARS = orbitingBody({

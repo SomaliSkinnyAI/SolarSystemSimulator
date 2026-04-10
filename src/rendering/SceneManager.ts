@@ -92,6 +92,7 @@ export class SceneManager {
     physicsRadius: number;
     isMoon?: boolean;
     parentGroup?: THREE.Group;
+    centerId?: string;  // body this ring orbits around (default: 'sun')
   }> = new Map();
   private static readonly _ringTmp = new THREE.Vector3();
   private static readonly RING_SEGS = 128;
@@ -525,7 +526,7 @@ export class SceneManager {
   // ---------------------------------------------------------------------------
   // Orbit rings — pre-drawn predicted orbital paths for each planet/moon
   // ---------------------------------------------------------------------------
-  buildOrbitRings(bodies: CelestialBody[]): void {
+  buildOrbitRings(bodies: CelestialBody[], realScale: boolean = false): void {
     this.clearOrbitRings();
     const N = SceneManager.RING_SEGS;
     const bodyById = new Map(bodies.map(b => [b.state.id, b]));
@@ -548,19 +549,30 @@ export class SceneManager {
       if (body.state.isMoon && body.state.parentId) {
         const parentBody = bodyById.get(body.state.parentId);
         if (parentBody) {
-          // Place ring as a child of the parent's group so it auto-scales with
-          // the parent's visual exaggeration — this puts the moon orbit ring
-          // visibly outside the parent's inflated sphere in both scale modes.
-          const r_local = body.state.position.clone()
-            .sub(parentBody.state.position).length() / DISPLAY_SCALE;
-          const posAttr = geo.attributes['position'] as THREE.BufferAttribute;
-          for (let i = 0; i < N; i++) {
-            const θ = (i / N) * Math.PI * 2;
-            posAttr.setXYZ(i, r_local * Math.cos(θ), 0, -r_local * Math.sin(θ));
+          const physDist = body.state.position.clone()
+            .sub(parentBody.state.position).length();
+
+          if (realScale) {
+            // Real scale: moon ring in world space, updated per-frame like planet rings
+            this.scene.add(line);
+            this.orbitRings.set(body.state.id, {
+              line, physicsRadius: physDist,
+              isMoon: true, centerId: body.state.parentId,
+            });
+          } else {
+            // Exaggerated: ring in parent group local space at visual offset
+            const orbitRatio = physDist / parentBody.state.radius;
+            const parentDisplayR = parentBody.visualRadius;
+            const sceneDist = parentDisplayR * (1.3 + orbitRatio * 0.08);
+            const posAttr = geo.attributes['position'] as THREE.BufferAttribute;
+            for (let i = 0; i < N; i++) {
+              const θ = (i / N) * Math.PI * 2;
+              posAttr.setXYZ(i, sceneDist * Math.cos(θ), 0, -sceneDist * Math.sin(θ));
+            }
+            posAttr.needsUpdate = true;
+            parentBody.group.add(line);
+            this.orbitRings.set(body.state.id, { line, physicsRadius: sceneDist, isMoon: true, parentGroup: parentBody.group });
           }
-          posAttr.needsUpdate = true;
-          parentBody.group.add(line);
-          this.orbitRings.set(body.state.id, { line, physicsRadius: r_local, isMoon: true, parentGroup: parentBody.group });
           continue;
         }
       }
@@ -583,7 +595,7 @@ export class SceneManager {
    * Moon rings are skipped — they live in the parent group's local space and
    * update automatically when the parent moves.
    */
-  updateOrbitRings(bodies: CelestialBody[], logScale: boolean, lerpT: number, G: number): void {
+  updateOrbitRings(bodies: CelestialBody[], logScale: boolean, lerpT: number, G: number, realScale: boolean = false): void {
     const N = SceneManager.RING_SEGS;
     const tmp = SceneManager._ringTmp;
     const bodyById = new Map(bodies.map(b => [b.state.id, b]));
@@ -593,7 +605,34 @@ export class SceneManager {
     const sunMass    = sun?.state.mass ?? 1.989e30;
 
     for (const [id, ring] of this.orbitRings) {
-      if (ring.isMoon) continue; // auto-updates via parent group transform
+      // In non-realScale mode, moon rings in parent group auto-update
+      if (ring.isMoon && !ring.centerId) continue;
+
+      // Real-scale moon ring: center on parent body
+      if (ring.isMoon && ring.centerId) {
+        const centerBody = bodyById.get(ring.centerId);
+        const moonBody = bodyById.get(id);
+        if (!centerBody || !moonBody) continue;
+
+        // Update orbital radius from current physics distance
+        const physDist = moonBody.state.position.distanceTo(centerBody.state.position);
+        ring.physicsRadius = physDist;
+
+        const centerPos = centerBody.state.position;
+        const posAttr = ring.line.geometry.attributes['position'] as THREE.BufferAttribute;
+        for (let i = 0; i < N; i++) {
+          const θ = (i / N) * Math.PI * 2;
+          tmp.set(
+            centerPos.x + physDist * Math.cos(θ),
+            centerPos.y,
+            centerPos.z - physDist * Math.sin(θ)
+          );
+          physicsToScene(tmp, logScale, lerpT, tmp);
+          posAttr.setXYZ(i, tmp.x, tmp.y, tmp.z);
+        }
+        posAttr.needsUpdate = true;
+        continue;
+      }
 
       const body = bodyById.get(id);
       if (body) {

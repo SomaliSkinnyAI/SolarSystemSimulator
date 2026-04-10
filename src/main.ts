@@ -10,6 +10,7 @@ import { SceneManager } from './rendering/SceneManager';
 import { TrailRenderer } from './rendering/TrailRenderer';
 import { BodySelector } from './ui/BodySelector';
 import { UIManager } from './ui/UIManager';
+import { DateOverlay } from './ui/DateOverlay';
 
 // ---------------------------------------------------------------------------
 // Shared mutable state — all subsystems read from these objects each frame
@@ -29,6 +30,7 @@ const simConfig: SimulationConfig = {
 const renderConfig: RenderConfig = {
   logScale: false,
   logScaleLerp: 0,
+  realScale: false,
   showTrails: false,
   trailLength: 500,
   showBloom: true,
@@ -77,7 +79,7 @@ function createBodiesFromState(): void {
 }
 
 createBodiesFromState();
-sceneManager.buildOrbitRings(bodies);
+sceneManager.buildOrbitRings(bodies, renderConfig.realScale);
 
 // ---------------------------------------------------------------------------
 // Physics engine
@@ -142,6 +144,47 @@ const ui = new UIManager(
   () => bodies
 );
 
+// ---------------------------------------------------------------------------
+// Date overlay (persistent date display + date picker)
+// ---------------------------------------------------------------------------
+const dateOverlay = new DateOverlay();
+
+dateOverlay.onDateJump = (targetDate: Date) => {
+  // Dispose all current bodies + trails
+  for (const b of bodies) b.dispose();
+  trailRenderer.disposeAll();
+  bodies = [];
+  physics.bodies = [];
+  sceneManager.clearLabels();
+  sceneManager.clearOrbitRings();
+
+  // Recompute bodies for target date
+  simConfig.timeScale = 1;
+  const states = computeBodiesForDate(targetDate);
+  for (const state of states) {
+    const body = new CelestialBody(state, textureLoader, scene);
+    body.setInitialRotation(targetDate);
+    const trail = trailRenderer.create(state.id, state.trailColor);
+    body.trail = trail;
+    bodies.push(body);
+  }
+
+  physics = new PhysicsEngine(bodies, simConfig);
+  physics.onBodyRemoved = (id) => { trailRenderer.dispose(id); bodies = physics.bodies; };
+  physics.onBodyMerged = (_s, removed) => trailRenderer.dispose(removed);
+
+  realTimeMode = true;
+  simEpoch = targetDate;
+  simTimeElapsed = 0;
+
+  bodySelector.deselectBody();
+  trailRenderer.clearAll();
+  trailLastPos.clear();
+  sceneManager.buildOrbitRings(bodies, renderConfig.realScale);
+  buildAllLabels();
+  ui.setRealTimeEnabled(true);
+};
+
 ui.onReset = () => {
   // Dispose all current bodies + trails
   for (const b of bodies) b.dispose();
@@ -159,14 +202,17 @@ ui.onReset = () => {
   physics.onBodyMerged = (_s, removed) => trailRenderer.dispose(removed);
 
   simTimeElapsed = 0;
+  simEpoch = J2000;
+  realTimeMode = false;
   bodySelector.deselectBody();
   sceneManager.resetCamera(renderConfig.logScale);
   trailRenderer.clearAll();
   trailLastPos.clear();
   sceneManager.clearOrbitRings();
-  sceneManager.buildOrbitRings(bodies);
+  sceneManager.buildOrbitRings(bodies, renderConfig.realScale);
   sceneManager.clearLabels();
   buildAllLabels();
+  ui.setRealTimeEnabled(false);
 };
 
 ui.onDeleteBody = (id) => {
@@ -176,6 +222,7 @@ ui.onDeleteBody = (id) => {
 };
 
 ui.onRealTimeToggle = (enabled) => {
+  if (enabled === realTimeMode) return; // guard against re-entrant calls from setRealTimeEnabled
   realTimeMode = enabled;
 
   // Dispose all current bodies + trails
@@ -187,16 +234,17 @@ ui.onRealTimeToggle = (enabled) => {
   sceneManager.clearOrbitRings();
 
   if (enabled) {
-    realTimeStartDate = new Date();
-    const states = computeBodiesForDate(realTimeStartDate);
+    simEpoch = new Date();
+    const states = computeBodiesForDate(simEpoch);
     for (const state of states) {
       const body = new CelestialBody(state, textureLoader, scene);
-      body.setInitialRotation(realTimeStartDate);
+      body.setInitialRotation(simEpoch);
       const trail = trailRenderer.create(state.id, state.trailColor);
       body.trail = trail;
       bodies.push(body);
     }
   } else {
+    simEpoch = J2000;
     createBodiesFromState();
   }
 
@@ -212,7 +260,7 @@ ui.onRealTimeToggle = (enabled) => {
   sceneManager.resetCamera(renderConfig.logScale);
   trailRenderer.clearAll();
   trailLastPos.clear();
-  sceneManager.buildOrbitRings(bodies);
+  sceneManager.buildOrbitRings(bodies, renderConfig.realScale);
   buildAllLabels();
 };
 
@@ -222,15 +270,18 @@ ui.onRealTimeToggle = (enabled) => {
 let lastTime = performance.now();
 let simTimeElapsed = 0;
 let realTimeMode = false;
-let realTimeStartDate = new Date();
+const J2000 = new Date(Date.UTC(2000, 0, 1, 12, 0, 0));
+let simEpoch = J2000;          // date corresponding to simTimeElapsed=0
+let simDate = new Date(J2000);  // current simulation date, updated every frame
 
 // Distance-based trail sampling — push a point when a body moves ≥ threshold
 // in scene space. This works correctly at any time scale.
 const MIN_TRAIL_DIST_SQ = 0.0025 * 0.0025; // 0.0025 scene units²
 const trailLastPos = new Map<string, THREE.Vector3>();
 
-// Track log scale toggle to reposition camera on change
+// Track log scale / real scale toggles to reposition camera and rebuild orbit rings
 let prevLogScale = renderConfig.logScale;
+let prevRealScale = renderConfig.realScale;
 
 function animate(): void {
   requestAnimationFrame(animate);
@@ -258,38 +309,48 @@ function animate(): void {
     trailLastPos.clear();       // reset distance-sampling cache
   }
 
+  // --- Rebuild orbit rings when real scale toggles ---
+  if (prevRealScale !== renderConfig.realScale) {
+    prevRealScale = renderConfig.realScale;
+    sceneManager.clearOrbitRings();
+    sceneManager.buildOrbitRings(bodies, renderConfig.realScale);
+    trailRenderer.clearAll();
+    trailLastPos.clear();
+  }
+
   // --- Update body mesh positions ---
   const sun = bodies.find(b => b.state.id === 'sun') ?? null;
 
   for (const body of bodies) {
-    body.updateScenePosition(renderConfig.logScale, lerpT);
+    body.updateScenePosition(renderConfig.logScale, lerpT, renderConfig.realScale);
     body.rotateBody(wallDt, simConfig.timeScale);
   }
 
   // --- Moon positioning (second pass — needs parent already updated) ---
-  // Override moon scene position so moons always clear the parent's inflated sphere.
-  // We map the real orbit-ratio (distance / parentRadius) to a compressed scene distance
-  // so inner moons aren't swallowed by the parent's exaggerated visual size.
-  for (const body of bodies) {
-    if (!body.state.isMoon || !body.state.parentId) continue;
-    const parent = bodies.find(b => b.state.id === body.state.parentId);
-    if (!parent) continue;
+  // In real scale mode, moons sit at their true physics-derived positions.
+  // Otherwise, override so moons clear the parent's inflated sphere.
+  if (!renderConfig.realScale) {
+    for (const body of bodies) {
+      if (!body.state.isMoon || !body.state.parentId) continue;
+      const parent = bodies.find(b => b.state.id === body.state.parentId);
+      if (!parent) continue;
 
-    const relPhys = new THREE.Vector3().subVectors(body.state.position, parent.state.position);
-    const physDist = relPhys.length();
-    if (physDist < 1) continue;
-    const dir = relPhys.divideScalar(physDist); // normalise in-place
+      const relPhys = new THREE.Vector3().subVectors(body.state.position, parent.state.position);
+      const physDist = relPhys.length();
+      if (physDist < 1) continue;
+      const dir = relPhys.divideScalar(physDist); // normalise in-place
 
-    // How many parent-radii from the parent centre is this moon in reality?
-    const orbitRatio = physDist / parent.state.radius;
+      // How many parent-radii from the parent centre is this moon in reality?
+      const orbitRatio = physDist / parent.state.radius;
 
-    // Parent's displayed radius in scene units
-    const parentDisplayR = parent.visualRadius * parent.group.scale.x;
+      // Parent's displayed radius in scene units
+      const parentDisplayR = parent.visualRadius * parent.group.scale.x;
 
-    // Map to scene distance: start at 1.3× parent radius, grow proportionally
-    const sceneDist = parentDisplayR * (1.3 + orbitRatio * 0.08);
+      // Map to scene distance: start at 1.3× parent radius, grow proportionally
+      const sceneDist = parentDisplayR * (1.3 + orbitRatio * 0.08);
 
-    body.group.position.copy(parent.group.position).addScaledVector(dir, sceneDist);
+      body.group.position.copy(parent.group.position).addScaledVector(dir, sceneDist);
+    }
   }
 
   // --- Update planet labels ---
@@ -299,7 +360,7 @@ function animate(): void {
   sceneManager.syncSunLight(sun);
 
   // --- Orbit rings (pre-drawn predicted paths) ---
-  sceneManager.updateOrbitRings(bodies, renderConfig.logScale, lerpT, simConfig.G);
+  sceneManager.updateOrbitRings(bodies, renderConfig.logScale, lerpT, simConfig.G, renderConfig.realScale);
 
   // --- Trails (distance-based sampling — works at any time scale) ---
   if (renderConfig.showTrails) {
@@ -377,9 +438,13 @@ function animate(): void {
   // --- Selection ring ---
   bodySelector.update();
 
+  // --- Update simulation date ---
+  simDate = new Date(simEpoch.getTime() + simTimeElapsed * 1000);
+  dateOverlay.updateDisplay(simDate);
+
   // --- UI refresh ---
-  const simDate = realTimeMode ? formatSimDate(realTimeStartDate, simTimeElapsed) : undefined;
-  ui.update(simTimeElapsed, bodies, simDate);
+  const simDateStr = formatSimDate(simEpoch, simTimeElapsed);
+  ui.update(simTimeElapsed, bodies, simDateStr);
 
   // --- Planet data card ---
   ui.updatePlanetCard(bodies);

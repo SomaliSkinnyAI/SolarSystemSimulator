@@ -148,14 +148,14 @@ interface BodyTemplate {
   texturePath: string | null; nightTexturePath: string | null;
   isEmissive: boolean; hasRings: boolean; hasAtmosphere: boolean;
   trailColor: number; isMoon: boolean; parentId: string | null;
-  rotationPeriod?: number; axialTilt?: number;
+  rotationPeriod?: number; axialTilt?: number; tiltAxisAngle?: number;
 }
 
 const TEMPLATES: Record<string, BodyTemplate> = {
   sun:     { id: 'sun', name: 'Sun', mass: SOLAR_MASS, radius: 6.957e8, color: 0xFDB813, texturePath: '/textures/sun.jpg', nightTexturePath: null, isEmissive: true, hasRings: false, hasAtmosphere: false, trailColor: 0xFDB813, isMoon: false, parentId: null, rotationPeriod: 2192832, axialTilt: 0.1265 },
   mercury: { id: 'mercury', name: 'Mercury', mass: 3.285e23, radius: 2.4397e6, color: 0xB5B5B5, texturePath: '/textures/mercury.jpg', nightTexturePath: null, isEmissive: false, hasRings: false, hasAtmosphere: false, trailColor: 0x888888, isMoon: false, parentId: null, rotationPeriod: 5067014, axialTilt: 0.0006 },
   venus:   { id: 'venus', name: 'Venus', mass: 4.867e24, radius: 6.0518e6, color: 0xE8C87E, texturePath: '/textures/venus.jpg', nightTexturePath: null, isEmissive: false, hasRings: false, hasAtmosphere: true, trailColor: 0xC8A860, isMoon: false, parentId: null, rotationPeriod: -20997360, axialTilt: 3.0962 },
-  earth:   { id: 'earth', name: 'Earth', mass: 5.972e24, radius: 6.371e6, color: 0x2E86AB, texturePath: '/textures/earth_day.jpg', nightTexturePath: '/textures/earth_night.jpg', isEmissive: false, hasRings: false, hasAtmosphere: true, trailColor: 0x4090C0, isMoon: false, parentId: null, rotationPeriod: 86164, axialTilt: 0.4091 },
+  earth:   { id: 'earth', name: 'Earth', mass: 5.972e24, radius: 6.371e6, color: 0x2E86AB, texturePath: '/textures/earth_day.jpg', nightTexturePath: '/textures/earth_night.jpg', isEmissive: false, hasRings: false, hasAtmosphere: true, trailColor: 0x4090C0, isMoon: false, parentId: null, rotationPeriod: 86164, axialTilt: 0.4091, tiltAxisAngle: Math.PI },
   mars:    { id: 'mars', name: 'Mars', mass: 6.39e23, radius: 3.3895e6, color: 0xC1440E, texturePath: '/textures/mars.jpg', nightTexturePath: null, isEmissive: false, hasRings: false, hasAtmosphere: true, trailColor: 0xA03010, isMoon: false, parentId: null, rotationPeriod: 88642, axialTilt: 0.4396 },
   jupiter: { id: 'jupiter', name: 'Jupiter', mass: 1.898e27, radius: 7.1492e7, color: 0xC88B3A, texturePath: '/textures/jupiter.jpg', nightTexturePath: null, isEmissive: false, hasRings: false, hasAtmosphere: true, trailColor: 0xA87030, isMoon: false, parentId: null, rotationPeriod: 35726, axialTilt: 0.0546 },
   saturn:  { id: 'saturn', name: 'Saturn', mass: 5.683e26, radius: 6.0268e7, color: 0xE8D5A3, texturePath: '/textures/saturn.jpg', nightTexturePath: null, isEmissive: false, hasRings: true, hasAtmosphere: true, trailColor: 0xC8B580, isMoon: false, parentId: null, rotationPeriod: 38362, axialTilt: 0.4665 },

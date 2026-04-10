@@ -80,6 +80,108 @@
         border: 1px solid rgba(255, 200, 50, 0.3);
       }
 
+      /* --- Date overlay --- */
+      #date-overlay {
+        position: fixed;
+        top: 12px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 150;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 2px;
+        padding: 6px 18px;
+        background: rgba(10, 12, 25, 0.75);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 8px;
+        backdrop-filter: blur(8px);
+        font-family: 'Courier New', monospace;
+        color: rgba(255, 255, 255, 0.85);
+        cursor: pointer;
+        user-select: none;
+        transition: border-color 0.2s;
+      }
+      #date-overlay:hover {
+        border-color: rgba(255, 255, 255, 0.35);
+      }
+      #date-display {
+        font-size: 15px;
+        font-weight: bold;
+        letter-spacing: 1.5px;
+      }
+      #time-display {
+        font-size: 11px;
+        color: rgba(255, 255, 255, 0.45);
+        letter-spacing: 0.5px;
+      }
+
+      /* --- Date picker modal --- */
+      #date-picker-modal {
+        display: none;
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        z-index: 300;
+        padding: 20px 24px;
+        background: rgba(15, 18, 35, 0.95);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 12px;
+        backdrop-filter: blur(16px);
+        font-family: 'Courier New', monospace;
+        color: rgba(255, 255, 255, 0.9);
+        box-shadow: 0 12px 48px rgba(0, 0, 0, 0.8);
+      }
+      #date-picker-modal.open { display: flex; flex-direction: column; gap: 12px; align-items: center; }
+      #date-picker-modal .picker-title {
+        font-size: 14px;
+        font-weight: bold;
+        letter-spacing: 1px;
+        color: rgba(255, 255, 255, 0.7);
+      }
+      #date-picker-modal input {
+        padding: 6px 10px;
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 6px;
+        color: white;
+        font-family: 'Courier New', monospace;
+        font-size: 14px;
+        outline: none;
+        width: 200px;
+        text-align: center;
+      }
+      #date-picker-modal input:focus { border-color: rgba(100, 180, 255, 0.5); }
+      #date-picker-modal .picker-buttons { display: flex; gap: 10px; }
+      #date-picker-modal button {
+        padding: 6px 20px;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.08);
+        color: white;
+        font-family: 'Courier New', monospace;
+        font-size: 13px;
+        cursor: pointer;
+        transition: background 0.2s;
+      }
+      #date-picker-modal button:hover { background: rgba(255, 255, 255, 0.18); }
+      #date-go-btn { background: rgba(60, 130, 200, 0.3); border-color: rgba(60, 130, 200, 0.5); }
+      #date-go-btn:hover { background: rgba(60, 130, 200, 0.5); }
+      #date-picker-modal .picker-hint {
+        font-size: 10px;
+        color: rgba(255, 255, 255, 0.3);
+      }
+      /* Modal backdrop */
+      #date-picker-backdrop {
+        display: none;
+        position: fixed;
+        inset: 0;
+        z-index: 250;
+        background: rgba(0, 0, 0, 0.5);
+      }
+      #date-picker-backdrop.open { display: block; }
+
       /* --- CSS2DRenderer overlay --- */
       #label-container {
         position: fixed;
@@ -200,6 +302,25 @@
     <div id="ui-root"></div>
     <div id="hud"></div>
     <div id="crosshair"></div>
+
+    <!-- Date overlay — always visible, click to open date picker -->
+    <div id="date-overlay">
+      <span id="date-display">2000-01-01</span>
+      <span id="time-display">12:00:00 UTC</span>
+    </div>
+
+    <!-- Date picker modal -->
+    <div id="date-picker-backdrop"></div>
+    <div id="date-picker-modal">
+      <div class="picker-title">Jump to Date</div>
+      <input type="date" id="date-input" />
+      <input type="time" id="time-input" value="12:00" step="1" />
+      <div class="picker-buttons">
+        <button id="date-go-btn">Go</button>
+        <button id="date-cancel-btn">Cancel</button>
+      </div>
+      <div class="picker-hint">JPL elements valid 1800 - 3000 AD</div>
+    </div>
     <div id="god-mode-hint">GOD MODE — Click to spawn body &bull; Drag to set velocity</div>
     <div id="planet-card">
       <div class="card-accent"></div>

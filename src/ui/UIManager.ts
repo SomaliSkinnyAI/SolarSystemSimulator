@@ -26,6 +26,9 @@ export class UIManager {
   onDeleteBody?: (id: string) => void;
   onRealTimeToggle?: (enabled: boolean) => void;
 
+  // Real-time proxy — shared with Tweakpane binding
+  private realTimeProxy = { enabled: false };
+
   // Tab pages
   private bodyPage!: TabPageApi;
   private infoPage!: TabPageApi;
@@ -150,8 +153,7 @@ export class UIManager {
 
     page.addBlade({ view: 'separator' });
 
-    const realTimeProxy = { enabled: false };
-    page.addBinding(realTimeProxy, 'enabled', { label: 'Real-Time Positions' })
+    page.addBinding(this.realTimeProxy, 'enabled', { label: 'Real-Time Positions' })
       .on('change', (ev: { value: boolean }) => {
         if (ev.value) {
           this.simConfig.timeScale = 1;
@@ -273,6 +275,10 @@ export class UIManager {
   // Visuals tab
   // ---------------------------------------------------------------------------
   private _buildVisualsPage(page: TabPageApi): void {
+    page.addBinding(this.renderConfig, 'realScale', { label: 'Real Scale' });
+
+    page.addBlade({ view: 'separator' });
+
     page.addBinding(this.renderConfig, 'showTrails', { label: 'Trails (T)' });
 
     page.addBinding(this.renderConfig, 'showBloom',  { label: 'Bloom (B)' })
@@ -501,6 +507,12 @@ export class UIManager {
     ).join('');
 
     this.planetCard.classList.add('visible');
+  }
+
+  /** Sync the Real-Time checkbox state (e.g. after a date jump) */
+  setRealTimeEnabled(enabled: boolean): void {
+    this.realTimeProxy.enabled = enabled;
+    this.pane.refresh();
   }
 
   dispose(): void {

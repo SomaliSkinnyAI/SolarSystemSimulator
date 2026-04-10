@@ -22,6 +22,7 @@ export interface BodyState {
   parentId: string | null;
   rotationPeriod?: number;  // sidereal rotation period in seconds (positive = prograde)
   axialTilt?: number;       // obliquity in radians
+  tiltAxisAngle?: number;   // azimuthal angle of tilt axis in sim XZ plane (radians)
 }
 
 // ---------------------------------------------------------------------------
@@ -47,6 +48,7 @@ export interface SimulationConfig {
 export interface RenderConfig {
   logScale: boolean;
   logScaleLerp: number;      // 0..1 animation progress for scale switch
+  realScale: boolean;         // true = bodies shown at true physical proportions
   showTrails: boolean;
   trailLength: number;       // max trail points per body
   showBloom: boolean;

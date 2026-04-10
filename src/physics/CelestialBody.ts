@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { BodyState } from '../types';
-import { physicsToScene, visualRadius } from '../utils/CoordinateSystem';
+import { physicsToScene, visualRadius, DISPLAY_SCALE } from '../utils/CoordinateSystem';
 import { Trail } from '../rendering/TrailRenderer';
 
 // ---------------------------------------------------------------------------
@@ -142,7 +142,10 @@ export class CelestialBody {
     if (state.hasAtmosphere) this._buildAtmosphere();
 
     // Apply axial tilt to the inner group (tilts mesh + rings + atmosphere together)
+    // Use YXZ order: first rotate around Y to orient tilt axis azimuth, then X for obliquity
     if (state.axialTilt) {
+      this.tiltGroup.rotation.order = 'YXZ';
+      this.tiltGroup.rotation.y = state.tiltAxisAngle ?? 0;
       this.tiltGroup.rotation.x = state.axialTilt;
     }
 
@@ -270,9 +273,9 @@ export class CelestialBody {
   // ---------------------------------------------------------------------------
   // Per-frame update
   // ---------------------------------------------------------------------------
-  updateScenePosition(logScale: boolean, lerpT: number): void {
+  updateScenePosition(logScale: boolean, lerpT: number, realScale: boolean = false): void {
     this._setScenePosition(logScale, lerpT);
-    this._updateGroupScale(lerpT);
+    this._updateGroupScale(lerpT, realScale);
 
     if (this.earthUniforms) {
       const bodyPos = this.group.position;
@@ -293,7 +296,15 @@ export class CelestialBody {
    * log mode every body has a sensible fixed visual radius, while in linear mode
    * the scale is 1.0 (unmodified physics-derived size).
    */
-  private _updateGroupScale(lerpT: number): void {
+  private _updateGroupScale(lerpT: number, realScale: boolean = false): void {
+    if (realScale) {
+      // True physical radius in scene units — no exaggeration
+      const trueSceneR = this.state.radius / DISPLAY_SCALE;
+      const factor = trueSceneR / this.visualRadius;
+      this.group.scale.setScalar(Math.max(1e-6, factor));
+      return;
+    }
+
     // Linear-mode target radii (scene units). At true scale, planets are
     // microscopic vs. orbital distances, so we exaggerate so they are always
     // visible regardless of zoom level.
@@ -308,8 +319,9 @@ export class CelestialBody {
       linearTargetR = 2.5;  logTargetR = 0.016;
     } else if (this.state.isMoon) {
       // Scale moons proportionally by physical radius so smaller moons are smaller
-      linearTargetR = Math.max(0.12, Math.min(0.4, this.state.radius / 7e6));
-      logTargetR    = Math.max(0.003, Math.min(0.009, this.state.radius / 3e8));
+      // Earth's Moon should be ~27% of Earth's visual size (real ratio)
+      linearTargetR = Math.max(0.15, Math.min(0.8, this.state.radius / 2.5e6));
+      logTargetR    = Math.max(0.004, Math.min(0.012, this.state.radius / 1.5e8));
     } else {
       linearTargetR = 1.8;  logTargetR = 0.012; // Pluto, Halley, spawned objects
     }
@@ -352,7 +364,8 @@ export class CelestialBody {
       // In Three.js SphereGeometry, lon=0° (Greenwich) faces +X at rotation.y=0.
       // After rotation R, the world normal for longitude λ is (cos(R+λ), 0, -sin(R+λ)).
       // Setting this parallel to sunDir gives R = sunAngle - π/2 - λ.
-      this.mesh.rotation.y = sunAngle - Math.PI / 2 - subSolarLonRad;
+      // Subtract tiltAxisAngle to compensate for the tiltGroup's Y rotation.
+      this.mesh.rotation.y = sunAngle - Math.PI / 2 - subSolarLonRad - (this.state.tiltAxisAngle ?? 0);
     }
   }
 
