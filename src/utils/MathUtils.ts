@@ -45,6 +45,64 @@ export function periodFromOrbitalEnergy(
   return 2 * Math.PI * Math.sqrt(a * a * a / (G * centralMass));
 }
 
+export interface OrbitalElementsSummary {
+  semiMajorAxis: number;
+  eccentricity: number;
+  inclination: number;
+  periapsis: number;
+  apoapsis: number;
+  bound: boolean;
+}
+
+/**
+ * Estimate osculating orbital elements from a two-body state vector.
+ * The simulator uses Y as the ecliptic normal, so inclination is measured
+ * against the XZ-plane.
+ */
+export function orbitalElementsFromState(
+  G: number,
+  centralMass: number,
+  rx: number, ry: number, rz: number,
+  vx: number, vy: number, vz: number
+): OrbitalElementsSummary {
+  const mu = G * centralMass;
+  const r = Math.sqrt(rx * rx + ry * ry + rz * rz);
+  const v2 = vx * vx + vy * vy + vz * vz;
+
+  const hx = ry * vz - rz * vy;
+  const hy = rz * vx - rx * vz;
+  const hz = rx * vy - ry * vx;
+  const h = Math.sqrt(hx * hx + hy * hy + hz * hz);
+
+  if (r <= 0 || h <= 0 || mu <= 0) {
+    return { semiMajorAxis: 0, eccentricity: 0, inclination: 0, periapsis: 0, apoapsis: 0, bound: false };
+  }
+
+  // e = (v x h) / mu - r / |r|
+  const vCrossHx = vy * hz - vz * hy;
+  const vCrossHy = vz * hx - vx * hz;
+  const vCrossHz = vx * hy - vy * hx;
+  const ex = vCrossHx / mu - rx / r;
+  const ey = vCrossHy / mu - ry / r;
+  const ez = vCrossHz / mu - rz / r;
+  const e = Math.sqrt(ex * ex + ey * ey + ez * ez);
+
+  const eps = v2 / 2 - mu / r;
+  if (eps >= 0) {
+    return { semiMajorAxis: 0, eccentricity: e, inclination: Math.acos(hy / h), periapsis: 0, apoapsis: 0, bound: false };
+  }
+
+  const a = -mu / (2 * eps);
+  return {
+    semiMajorAxis: a,
+    eccentricity: e,
+    inclination: Math.acos(Math.max(-1, Math.min(1, hy / h))),
+    periapsis: a * (1 - e),
+    apoapsis: a * (1 + e),
+    bound: true,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Lagrange point approximations (distances from the primary)
 // ---------------------------------------------------------------------------

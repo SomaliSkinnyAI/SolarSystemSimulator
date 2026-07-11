@@ -38,11 +38,17 @@ interface BHNode {
   totalMass: number;
   comX: number; comY: number; comZ: number;
   bodyIdx: number;       // ≥0 for leaf, -1 for internal
+  bodyX: number; bodyY: number; bodyZ: number; bodyMass: number;
   children: (BHNode | null)[];
 }
 
 function makeBHNode(cx: number, cy: number, cz: number, halfSize: number): BHNode {
-  return { cx, cy, cz, halfSize, totalMass: 0, comX: 0, comY: 0, comZ: 0, bodyIdx: -1, children: new Array(8).fill(null) };
+  return {
+    cx, cy, cz, halfSize,
+    totalMass: 0, comX: 0, comY: 0, comZ: 0,
+    bodyIdx: -1, bodyX: 0, bodyY: 0, bodyZ: 0, bodyMass: 0,
+    children: new Array(8).fill(null),
+  };
 }
 
 function bhInsert(node: BHNode, idx: number, px: number, py: number, pz: number, mass: number): void {
@@ -51,6 +57,7 @@ function bhInsert(node: BHNode, idx: number, px: number, py: number, pz: number,
     node.bodyIdx = idx;
     node.totalMass = mass;
     node.comX = px; node.comY = py; node.comZ = pz;
+    node.bodyX = px; node.bodyY = py; node.bodyZ = pz; node.bodyMass = mass;
     return;
   }
   // Update centre of mass
@@ -63,11 +70,12 @@ function bhInsert(node: BHNode, idx: number, px: number, py: number, pz: number,
   if (node.bodyIdx >= 0) {
     // Convert leaf to internal node — push existing body into child
     const eIdx = node.bodyIdx;
+    const ex = node.bodyX;
+    const ey = node.bodyY;
+    const ez = node.bodyZ;
+    const eMass = node.bodyMass;
     node.bodyIdx = -1;
-    // We don't have the original positions here, so we use comX/Y/Z pre-update
-    // This is a simplification; for accuracy we should store the original positions
-    // but for > 50 bodies it's a good enough approximation
-    bhInsertIntoChild(node, eIdx, node.comX, node.comY, node.comZ, 0);
+    bhInsertIntoChild(node, eIdx, ex, ey, ez, eMass);
   }
 
   bhInsertIntoChild(node, idx, px, py, pz, mass);

@@ -119,8 +119,10 @@ export class SceneManager {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.0;
+    this.renderer.toneMappingExposure = 1.08;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
     const container = document.getElementById('canvas-container')!;
     container.appendChild(this.renderer.domElement);
@@ -143,11 +145,16 @@ export class SceneManager {
     this.controls.zoomSpeed = 2.5;
 
     // Lights
-    this.sunLight = new THREE.PointLight(0xFFF5E0, 2.0, 0, 0); // decay=0: constant reach for both log and linear scale
+    this.sunLight = new THREE.PointLight(0xFFF5E0, 4.0, 0, 0); // decay=0: constant reach for both log and linear scale
     this.sunLight.position.set(0, 0, 0);
+    this.sunLight.castShadow = true;
+    this.sunLight.shadow.mapSize.set(1024, 1024);
+    this.sunLight.shadow.camera.near = 0.1;
+    this.sunLight.shadow.camera.far = 1e6;
+    this.sunLight.shadow.bias = -0.00005;
     this.scene.add(this.sunLight);
 
-    this.ambientLight = new THREE.AmbientLight(0x222233, 0.25);
+    this.ambientLight = new THREE.AmbientLight(0x182033, 0.13);
     this.scene.add(this.ambientLight);
 
     // Starfield
@@ -218,19 +225,31 @@ export class SceneManager {
       this.asteroidMesh.geometry.dispose();
       (this.asteroidMesh.material as THREE.Material).dispose();
     }
-    const geo = new THREE.SphereGeometry(0.008, 4, 3);
-    const mat = new THREE.MeshStandardMaterial({ color: 0x888877, roughness: 0.95, metalness: 0.1 });
-    const count = 600;
+    const geo = new THREE.SphereGeometry(0.007, 5, 4);
+    const mat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.96,
+      metalness: 0.08,
+      vertexColors: true,
+    });
+    const count = 1800;
     this.asteroidMesh = new THREE.InstancedMesh(geo, mat, count);
     this.asteroidMesh.castShadow = false;
 
     const matrix = new THREE.Matrix4();
     const quat   = new THREE.Quaternion();
+    const color  = new THREE.Color();
     for (let i = 0; i < count; i++) {
       const angle = Math.random() * Math.PI * 2;
-      const r = ((2.2 + Math.random() * 1.1) * AU) / DISPLAY_SCALE;
-      const y = (Math.random() - 0.5) * 0.08 * AU / DISPLAY_SCALE;
-      const scale = randRange(0.4, 1.6);
+      const eccentricity = randRange(0.0, 0.22);
+      let semiMajorAxisAU = 2.05 + Math.pow(Math.random(), 0.72) * 1.35;
+      if (Math.abs(semiMajorAxisAU - 2.50) < 0.035) semiMajorAxisAU += 0.055;
+      if (Math.abs(semiMajorAxisAU - 2.82) < 0.040) semiMajorAxisAU -= 0.060;
+      const orbitR = semiMajorAxisAU * (1 - eccentricity * eccentricity) / (1 + eccentricity * Math.cos(angle));
+      const r = (orbitR * AU) / DISPLAY_SCALE;
+      const inc = randRange(-0.13, 0.13);
+      const y = Math.sin(inc) * r * Math.sin(angle * 1.7);
+      const scale = Math.pow(Math.random(), 2.4) * 2.2 + 0.25;
       quat.setFromEuler(new THREE.Euler(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI));
       matrix.compose(
         new THREE.Vector3(Math.cos(angle) * r, y, Math.sin(angle) * r),
@@ -238,8 +257,15 @@ export class SceneManager {
         new THREE.Vector3(scale, scale, scale)
       );
       this.asteroidMesh.setMatrixAt(i, matrix);
+
+      const metallic = Math.random();
+      if (metallic > 0.88) color.setRGB(0.62, 0.58, 0.50);
+      else if (metallic > 0.62) color.setRGB(0.46, 0.42, 0.36);
+      else color.setRGB(0.30, 0.29, 0.26);
+      this.asteroidMesh.setColorAt(i, color);
     }
     this.asteroidMesh.instanceMatrix.needsUpdate = true;
+    if (this.asteroidMesh.instanceColor) this.asteroidMesh.instanceColor.needsUpdate = true;
     this.scene.add(this.asteroidMesh);
   }
 
@@ -540,7 +566,7 @@ export class SceneManager {
       const mat = new THREE.LineBasicMaterial({
         color: body.state.trailColor,
         transparent: true,
-        opacity: body.state.isMoon ? 0.5 : 0.28,
+        opacity: body.state.isMoon ? 0.48 : 0.24,
         depthWrite: false,
       });
       const line = new THREE.LineLoop(geo, mat);
@@ -614,47 +640,50 @@ export class SceneManager {
         const moonBody = bodyById.get(id);
         if (!centerBody || !moonBody) continue;
 
-        // Update orbital radius from current physics distance
-        const physDist = moonBody.state.position.distanceTo(centerBody.state.position);
-        ring.physicsRadius = physDist;
-
-        const centerPos = centerBody.state.position;
         const posAttr = ring.line.geometry.attributes['position'] as THREE.BufferAttribute;
-        for (let i = 0; i < N; i++) {
-          const θ = (i / N) * Math.PI * 2;
-          tmp.set(
-            centerPos.x + physDist * Math.cos(θ),
-            centerPos.y,
-            centerPos.z - physDist * Math.sin(θ)
-          );
-          physicsToScene(tmp, logScale, lerpT, tmp);
-          posAttr.setXYZ(i, tmp.x, tmp.y, tmp.z);
+        const relPos = moonBody.state.position.clone().sub(centerBody.state.position);
+        const relVel = moonBody.state.velocity.clone().sub(centerBody.state.velocity);
+        const wroteOrbit = this._writeKeplerRing(
+          posAttr, centerBody.state.position, centerBody.state.mass,
+          relPos, relVel, logScale, lerpT, G
+        );
+        if (!wroteOrbit) {
+          const physDist = relPos.length();
+          ring.physicsRadius = physDist;
+          const centerPos = centerBody.state.position;
+          for (let i = 0; i < N; i++) {
+            const θ = (i / N) * Math.PI * 2;
+            tmp.set(
+              centerPos.x + physDist * Math.cos(θ),
+              centerPos.y,
+              centerPos.z - physDist * Math.sin(θ)
+            );
+            physicsToScene(tmp, logScale, lerpT, tmp);
+            posAttr.setXYZ(i, tmp.x, tmp.y, tmp.z);
+          }
         }
         posAttr.needsUpdate = true;
         continue;
       }
 
+      const posAttr = ring.line.geometry.attributes['position'] as THREE.BufferAttribute;
       const body = bodyById.get(id);
       if (body) {
         // Relative position and velocity w.r.t. the Sun
-        const rx = body.state.position.x - sunPhysPos.x;
-        const ry = body.state.position.y - sunPhysPos.y;
-        const rz = body.state.position.z - sunPhysPos.z;
-        const vx = body.state.velocity.x - sunVel.x;
-        const vy = body.state.velocity.y - sunVel.y;
-        const vz = body.state.velocity.z - sunVel.z;
-        const r   = Math.sqrt(rx*rx + ry*ry + rz*rz);
-        const v2  = vx*vx + vy*vy + vz*vz;
-        const eps = v2 * 0.5 - G * sunMass / r; // specific orbital energy
-        if (eps < 0) {
-          // Bound orbit — semi-major axis is a constant of motion
-          ring.physicsRadius = -G * sunMass / (2 * eps);
-        } else {
-          ring.physicsRadius = r; // unbound/escape, fallback to current radius
+        const relPos = body.state.position.clone().sub(sunPhysPos);
+        const relVel = body.state.velocity.clone().sub(sunVel);
+        const wroteOrbit = this._writeKeplerRing(
+          posAttr, sunPhysPos, sunMass, relPos, relVel, logScale, lerpT, G
+        );
+        if (wroteOrbit) {
+          posAttr.needsUpdate = true;
+          continue;
         }
+
+        const r = relPos.length();
+        ring.physicsRadius = r; // unbound/escape, fallback to current radius
       }
 
-      const posAttr = ring.line.geometry.attributes['position'] as THREE.BufferAttribute;
       const r = ring.physicsRadius;
       // Centre ring on Sun's current scene position so it follows Sun's drift
       for (let i = 0; i < N; i++) {
@@ -665,6 +694,57 @@ export class SceneManager {
       }
       posAttr.needsUpdate = true;
     }
+  }
+
+  private _writeKeplerRing(
+    posAttr: THREE.BufferAttribute,
+    focusPhysPos: THREE.Vector3,
+    centralMass: number,
+    relPos: THREE.Vector3,
+    relVel: THREE.Vector3,
+    logScale: boolean,
+    lerpT: number,
+    G: number
+  ): boolean {
+    const N = SceneManager.RING_SEGS;
+    const mu = G * centralMass;
+    const r = relPos.length();
+    if (r < 1 || mu <= 0) return false;
+
+    const h = new THREE.Vector3().crossVectors(relPos, relVel);
+    const hMag = h.length();
+    if (hMag < 1e-6) return false;
+
+    const v2 = relVel.lengthSq();
+    const eps = v2 * 0.5 - mu / r;
+    if (eps >= 0) return false;
+
+    const a = -mu / (2 * eps);
+    const eVec = new THREE.Vector3().crossVectors(relVel, h).multiplyScalar(1 / mu)
+      .addScaledVector(relPos, -1 / r);
+    const e = eVec.length();
+    if (!Number.isFinite(a) || !Number.isFinite(e) || e >= 0.999) return false;
+
+    const hHat = h.divideScalar(hMag);
+    const pHat = e > 1e-4 ? eVec.divideScalar(e) : relPos.clone().normalize();
+    const qHat = new THREE.Vector3().crossVectors(hHat, pHat).normalize();
+    const semiLatus = a * (1 - e * e);
+    if (!Number.isFinite(semiLatus) || semiLatus <= 0) return false;
+
+    const tmpPhys = new THREE.Vector3();
+    const tmpScene = SceneManager._ringTmp;
+    for (let i = 0; i < N; i++) {
+      const theta = (i / N) * Math.PI * 2;
+      const cosT = Math.cos(theta);
+      const sinT = Math.sin(theta);
+      const orbitR = semiLatus / (1 + e * cosT);
+      tmpPhys.copy(focusPhysPos)
+        .addScaledVector(pHat, orbitR * cosT)
+        .addScaledVector(qHat, orbitR * sinT);
+      physicsToScene(tmpPhys, logScale, lerpT, tmpScene);
+      posAttr.setXYZ(i, tmpScene.x, tmpScene.y, tmpScene.z);
+    }
+    return true;
   }
 
   clearOrbitRings(): void {

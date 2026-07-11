@@ -143,7 +143,7 @@ function computeHeliocentricState(
 // Body metadata templates (shared between default and real-time modes)
 // ---------------------------------------------------------------------------
 
-interface BodyTemplate {
+export interface BodyTemplate {
   id: string; name: string; mass: number; radius: number; color: number;
   texturePath: string | null; nightTexturePath: string | null;
   isEmissive: boolean; hasRings: boolean; hasAtmosphere: boolean;
@@ -151,7 +151,7 @@ interface BodyTemplate {
   rotationPeriod?: number; axialTilt?: number; tiltAxisAngle?: number;
 }
 
-const TEMPLATES: Record<string, BodyTemplate> = {
+export const TEMPLATES: Record<string, BodyTemplate> = {
   sun:     { id: 'sun', name: 'Sun', mass: SOLAR_MASS, radius: 6.957e8, color: 0xFDB813, texturePath: '/textures/sun.jpg', nightTexturePath: null, isEmissive: true, hasRings: false, hasAtmosphere: false, trailColor: 0xFDB813, isMoon: false, parentId: null, rotationPeriod: 2192832, axialTilt: 0.1265 },
   mercury: { id: 'mercury', name: 'Mercury', mass: 3.285e23, radius: 2.4397e6, color: 0xB5B5B5, texturePath: '/textures/mercury.jpg', nightTexturePath: null, isEmissive: false, hasRings: false, hasAtmosphere: false, trailColor: 0x888888, isMoon: false, parentId: null, rotationPeriod: 5067014, axialTilt: 0.0006 },
   venus:   { id: 'venus', name: 'Venus', mass: 4.867e24, radius: 6.0518e6, color: 0xE8C87E, texturePath: '/textures/venus.jpg', nightTexturePath: null, isEmissive: false, hasRings: false, hasAtmosphere: true, trailColor: 0xC8A860, isMoon: false, parentId: null, rotationPeriod: -20997360, axialTilt: 3.0962 },
@@ -162,6 +162,7 @@ const TEMPLATES: Record<string, BodyTemplate> = {
   uranus:  { id: 'uranus', name: 'Uranus', mass: 8.681e25, radius: 2.5559e7, color: 0x7DE8E8, texturePath: '/textures/uranus.jpg', nightTexturePath: null, isEmissive: false, hasRings: false, hasAtmosphere: true, trailColor: 0x50C0C0, isMoon: false, parentId: null, rotationPeriod: -62035, axialTilt: 1.7064 },
   neptune: { id: 'neptune', name: 'Neptune', mass: 1.024e26, radius: 2.4764e7, color: 0x3F54BA, texturePath: '/textures/neptune.jpg', nightTexturePath: null, isEmissive: false, hasRings: false, hasAtmosphere: true, trailColor: 0x3040A0, isMoon: false, parentId: null, rotationPeriod: 57974, axialTilt: 0.4943 },
   pluto:   { id: 'pluto', name: 'Pluto', mass: 1.303e22, radius: 1.1883e6, color: 0xCAAE8B, texturePath: '/textures/pluto.jpg', nightTexturePath: null, isEmissive: false, hasRings: false, hasAtmosphere: false, trailColor: 0xA08060, isMoon: false, parentId: null, rotationPeriod: -551857, axialTilt: 2.1388 },
+  halley:  { id: 'halley', name: "Halley's Comet", mass: 2.2e14, radius: 5.5e3, color: 0xCCCCCC, texturePath: null, nightTexturePath: null, isEmissive: false, hasRings: false, hasAtmosphere: false, trailColor: 0xCCCCDD, isMoon: false, parentId: null },
   // Moons
   moon:      { id: 'moon', name: 'Moon', mass: 7.342e22, radius: 1.7374e6, color: 0xAAAAAA, texturePath: '/textures/moon.jpg', nightTexturePath: null, isEmissive: false, hasRings: false, hasAtmosphere: false, trailColor: 0x909090, isMoon: true, parentId: 'earth', rotationPeriod: 2360621, axialTilt: 0.1167 },
   io:        { id: 'io', name: 'Io', mass: 8.932e22, radius: 1.8216e6, color: 0xC8B040, texturePath: '/textures/io.jpg', nightTexturePath: null, isEmissive: false, hasRings: false, hasAtmosphere: false, trailColor: 0xA09030, isMoon: true, parentId: 'jupiter', rotationPeriod: 152854 },
@@ -209,7 +210,7 @@ const PLUTO_ELEMENTS: OrbitalElements = {
 // Compute all bodies for a given date
 // ---------------------------------------------------------------------------
 
-function makeBody(tpl: BodyTemplate, pos: THREE.Vector3, vel: THREE.Vector3): BodyState {
+export function makeBody(tpl: BodyTemplate, pos: THREE.Vector3, vel: THREE.Vector3): BodyState {
   return {
     ...tpl,
     position: pos,
@@ -293,9 +294,7 @@ export function computeBodiesForDate(date: Date): BodyState[] {
   const HALLEY_V = Math.sqrt(G_REAL * SOLAR_MASS * (2 / APHELION_HALLEY - 1 / (17.834 * AU)));
   const hAngle = 55 * DEG2RAD;
   bodies.push(makeBody(
-    { id: 'halley', name: "Halley's Comet", mass: 2.2e14, radius: 5.5e3, color: 0xCCCCCC,
-      texturePath: null, nightTexturePath: null, isEmissive: false, hasRings: false,
-      hasAtmosphere: false, trailColor: 0xCCCCDD, isMoon: false, parentId: null },
+    TEMPLATES['halley']!,
     new THREE.Vector3(APHELION_HALLEY * Math.cos(hAngle), 0, -APHELION_HALLEY * Math.sin(hAngle)),
     new THREE.Vector3(-HALLEY_V * Math.sin(hAngle), 0, -HALLEY_V * Math.cos(hAngle))
   ));

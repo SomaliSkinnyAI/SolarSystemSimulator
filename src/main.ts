@@ -4,6 +4,8 @@ import { cloneInitialBodies, nextBodyId } from './data/solarSystemData';
 import { G_REAL, G_EXAGGERATED } from './utils/MathUtils';
 import { DISPLAY_SCALE } from './utils/CoordinateSystem';
 import { computeBodiesForDate, formatSimDate } from './data/realTimeOrbits';
+import { computeBodiesFromHorizonsCache } from './data/horizonsEphemeris';
+import { scanSystemEvents } from './utils/EventPredictor';
 import { CelestialBody } from './physics/CelestialBody';
 import { PhysicsEngine } from './physics/PhysicsEngine';
 import { SceneManager } from './rendering/SceneManager';
@@ -195,33 +197,63 @@ ui.onGodModeToggle = (active) => {
 // Date overlay (persistent date display + date picker)
 // ---------------------------------------------------------------------------
 const dateOverlay = new DateOverlay();
+const scaleLegend = document.getElementById('scale-legend');
+const eventPanel = document.getElementById('event-panel');
+let ephemerisSource = 'Default J2000 circular startup state';
 
-dateOverlay.onDateJump = (targetDate: Date) => {
-  // Dispose all current bodies + trails
+function disposeCurrentBodies(): void {
   for (const b of bodies) b.dispose();
   trailRenderer.disposeAll();
   bodies = [];
   physics.bodies = [];
   sceneManager.clearLabels();
   sceneManager.clearOrbitRings();
+}
 
-  // Recompute bodies for target date
-  simConfig.timeScale = 1;
-  const states = computeBodiesForDate(targetDate);
+function attachPhysicsCallbacks(): void {
+  physics.onBodyRemoved = (id) => {
+    trailRenderer.dispose(id);
+    bodies = physics.bodies;
+    ui.update(simTimeElapsed, bodies);
+  };
+  physics.onBodyMerged = (_s, removed) => trailRenderer.dispose(removed);
+}
+
+function createBodiesFromStates(states: ReturnType<typeof computeBodiesForDate>, rotationDate?: Date): void {
   for (const state of states) {
     const body = new CelestialBody(state, textureLoader, scene);
-    body.setInitialRotation(targetDate);
+    if (rotationDate) body.setInitialRotation(rotationDate);
     const trail = trailRenderer.create(state.id, state.trailColor);
     body.trail = trail;
     bodies.push(body);
   }
+}
 
+async function statesForDate(targetDate: Date): Promise<{
+  states: ReturnType<typeof computeBodiesForDate>;
+  source: string;
+}> {
+  const horizons = await computeBodiesFromHorizonsCache(targetDate);
+  if (horizons) {
+    return {
+      states: horizons.bodies,
+      source: `${horizons.source} (${horizons.cacheRange})`,
+    };
+  }
+  return {
+    states: computeBodiesForDate(targetDate),
+    source: 'JPL approximate Keplerian elements fallback',
+  };
+}
+
+function rebuildSimulationFromStates(states: ReturnType<typeof computeBodiesForDate>, epoch: Date, useRealTime: boolean): void {
+  disposeCurrentBodies();
+  createBodiesFromStates(states, useRealTime ? epoch : undefined);
   physics = new PhysicsEngine(bodies, simConfig);
-  physics.onBodyRemoved = (id) => { trailRenderer.dispose(id); bodies = physics.bodies; };
-  physics.onBodyMerged = (_s, removed) => trailRenderer.dispose(removed);
+  attachPhysicsCallbacks();
 
-  realTimeMode = true;
-  simEpoch = targetDate;
+  realTimeMode = useRealTime;
+  simEpoch = epoch;
   simTimeElapsed = 0;
 
   bodySelector.deselectBody();
@@ -229,28 +261,54 @@ dateOverlay.onDateJump = (targetDate: Date) => {
   trailLastPos.clear();
   sceneManager.buildOrbitRings(bodies, renderConfig.realScale);
   buildAllLabels();
+}
+
+function escapeHtml(text: string): string {
+  return text.replace(/[&<>"']/g, (ch) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#039;',
+  }[ch] ?? ch));
+}
+
+function updateEventPanel(): void {
+  if (!eventPanel) return;
+  const summary = scanSystemEvents(bodies.map(b => b.state), simConfig.G);
+  if (!summary) {
+    eventPanel.classList.remove('visible');
+    return;
+  }
+
+  eventPanel.innerHTML = [
+    '<div class="event-title">Live Event Scan</div>',
+    `<div><span>Closest major pair</span><strong>${escapeHtml(summary.closestMajorPair)}</strong><em>${summary.closestMajorDistance}</em></div>`,
+    `<div><span>Tightest alignment</span><strong>${escapeHtml(summary.tightestConjunction)}</strong><em>${summary.tightestConjunctionAngle}</em></div>`,
+    `<div><span>Fastest orbit</span><strong>${escapeHtml(summary.fastestBody)}</strong><em>${summary.fastestBodySpeed}</em></div>`,
+    `<div><span>Most eccentric</span><strong>${escapeHtml(summary.mostEccentricOrbit)}</strong><em>e = ${summary.mostEccentricValue}</em></div>`,
+  ].join('');
+  eventPanel.classList.add('visible');
+}
+
+dateOverlay.onDateJump = async (targetDate: Date) => {
+  simConfig.timeScale = 1;
+  const result = await statesForDate(targetDate);
+  ephemerisSource = result.source;
+  rebuildSimulationFromStates(result.states, targetDate, true);
   ui.setRealTimeEnabled(true);
 };
 
 ui.onReset = () => {
-  // Dispose all current bodies + trails
-  for (const b of bodies) b.dispose();
-  trailRenderer.disposeAll();
-  bodies = [];
-  physics.bodies = [];
-
-  // Recreate
+  disposeCurrentBodies();
   createBodiesFromState();
   physics = new PhysicsEngine(bodies, simConfig);
-  physics.onBodyRemoved = (id) => {
-    trailRenderer.dispose(id);
-    bodies = physics.bodies;
-  };
-  physics.onBodyMerged = (_s, removed) => trailRenderer.dispose(removed);
+  attachPhysicsCallbacks();
 
   simTimeElapsed = 0;
   simEpoch = J2000;
   realTimeMode = false;
+  ephemerisSource = 'Default J2000 circular startup state';
   bodySelector.deselectBody();
   sceneManager.resetCamera(renderConfig.logScale);
   trailRenderer.clearAll();
@@ -268,47 +326,31 @@ ui.onDeleteBody = (id) => {
   bodies = physics.bodies;
 };
 
-ui.onRealTimeToggle = (enabled) => {
+ui.onRealTimeToggle = async (enabled) => {
   if (enabled === realTimeMode) return; // guard against re-entrant calls from setRealTimeEnabled
-  realTimeMode = enabled;
-
-  // Dispose all current bodies + trails
-  for (const b of bodies) b.dispose();
-  trailRenderer.disposeAll();
-  bodies = [];
-  physics.bodies = [];
-  sceneManager.clearLabels();
-  sceneManager.clearOrbitRings();
 
   if (enabled) {
-    simEpoch = new Date();
-    const states = computeBodiesForDate(simEpoch);
-    for (const state of states) {
-      const body = new CelestialBody(state, textureLoader, scene);
-      body.setInitialRotation(simEpoch);
-      const trail = trailRenderer.create(state.id, state.trailColor);
-      body.trail = trail;
-      bodies.push(body);
-    }
+    const epoch = new Date();
+    const result = await statesForDate(epoch);
+    ephemerisSource = result.source;
+    rebuildSimulationFromStates(result.states, epoch, true);
   } else {
-    simEpoch = J2000;
+    ephemerisSource = 'Default J2000 circular startup state';
+    disposeCurrentBodies();
     createBodiesFromState();
+    physics = new PhysicsEngine(bodies, simConfig);
+    attachPhysicsCallbacks();
+    realTimeMode = false;
+    simEpoch = J2000;
+    simTimeElapsed = 0;
+    bodySelector.deselectBody();
+    trailRenderer.clearAll();
+    trailLastPos.clear();
+    sceneManager.buildOrbitRings(bodies, renderConfig.realScale);
+    buildAllLabels();
   }
 
-  physics = new PhysicsEngine(bodies, simConfig);
-  physics.onBodyRemoved = (id) => {
-    trailRenderer.dispose(id);
-    bodies = physics.bodies;
-  };
-  physics.onBodyMerged = (_s, removed) => trailRenderer.dispose(removed);
-
-  simTimeElapsed = 0;
-  bodySelector.deselectBody();
   sceneManager.resetCamera(renderConfig.logScale);
-  trailRenderer.clearAll();
-  trailLastPos.clear();
-  sceneManager.buildOrbitRings(bodies, renderConfig.realScale);
-  buildAllLabels();
 };
 
 // ---------------------------------------------------------------------------
@@ -329,6 +371,7 @@ const trailLastPos = new Map<string, THREE.Vector3>();
 // Track log scale / real scale toggles to reposition camera and rebuild orbit rings
 let prevLogScale = renderConfig.logScale;
 let prevRealScale = renderConfig.realScale;
+let eventPanelTimer = 1;
 
 function animate(): void {
   requestAnimationFrame(animate);
@@ -370,6 +413,7 @@ function animate(): void {
 
   for (const body of bodies) {
     body.updateScenePosition(renderConfig.logScale, lerpT, renderConfig.realScale);
+    body.setAtmosphereVisible(renderConfig.showAtmospheres);
     body.rotateBody(wallDt, simConfig.timeScale);
   }
 
@@ -457,6 +501,26 @@ function animate(): void {
   // --- Update simulation date ---
   simDate = new Date(simEpoch.getTime() + simTimeElapsed * 1000);
   dateOverlay.updateDisplay(simDate);
+  if (scaleLegend) {
+    const scaleMode = renderConfig.realScale
+      ? 'True body radii'
+      : renderConfig.logScale
+        ? 'Log distance scale'
+        : 'Educational body scale';
+    const physicsMode = simConfig.integrator === 'RK4' ? 'RK4 N-body' : 'Velocity Verlet';
+    scaleLegend.innerHTML = [
+      `<span>${scaleMode}</span>`,
+      `<span>${physicsMode}</span>`,
+      `<span>${bodies.length} bodies</span>`,
+      `<span>${ephemerisSource}</span>`,
+    ].join('');
+  }
+
+  eventPanelTimer += wallDt;
+  if (eventPanelTimer >= 0.5) {
+    eventPanelTimer = 0;
+    updateEventPanel();
+  }
 
   // --- UI refresh ---
   const simDateStr = formatSimDate(simEpoch, simTimeElapsed);

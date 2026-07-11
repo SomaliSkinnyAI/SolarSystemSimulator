@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { randomOnSphere, randRange } from '../utils/MathUtils';
 
-const STAR_COUNT = 12000;
+const STAR_COUNT = 18000;
 const STAR_SPHERE_RADIUS = 5e5; // scene units — far beyond any planet
 
 export class StarField {
@@ -19,7 +19,23 @@ export class StarField {
     const sizes     = new Float32Array(STAR_COUNT);
 
     for (let i = 0; i < STAR_COUNT; i++) {
-      const [sx, sy, sz] = randomOnSphere();
+      let sx: number;
+      let sy: number;
+      let sz: number;
+
+      // Bias a portion of the stars into a soft Milky Way-like band instead of
+      // distributing everything uniformly. The sphere still surrounds the scene.
+      if (Math.random() < 0.38) {
+        const angle = Math.random() * Math.PI * 2;
+        const bandOffset = (Math.random() - 0.5) * 0.20;
+        const wobble = Math.sin(angle * 3.0) * 0.05;
+        sy = bandOffset + wobble;
+        const radial = Math.sqrt(Math.max(0.001, 1 - sy * sy));
+        sx = Math.cos(angle) * radial;
+        sz = Math.sin(angle) * radial;
+      } else {
+        [sx, sy, sz] = randomOnSphere();
+      }
       const r = STAR_SPHERE_RADIUS;
       positions[i * 3]     = sx * r;
       positions[i * 3 + 1] = sy * r;
@@ -45,12 +61,12 @@ export class StarField {
         cr = 1.0; cg = 0.25; cb = 0.15;
       }
 
-      const brightness = randRange(0.35, 1.0);
+      const brightness = Math.random() < 0.018 ? randRange(1.3, 2.4) : randRange(0.28, 1.0);
       colors[i * 3]     = cr * brightness;
       colors[i * 3 + 1] = cg * brightness;
       colors[i * 3 + 2] = cb * brightness;
 
-      sizes[i] = randRange(0.8, 2.5);
+      sizes[i] = Math.random() < 0.018 ? randRange(2.8, 4.6) : randRange(0.55, 2.1);
     }
 
     const geo = new THREE.BufferGeometry();
@@ -75,12 +91,11 @@ export class StarField {
         uniform float opacity;
         varying vec3 vColor;
         void main() {
-          // Circular point (disc)
+          // Circular point with a soft stellar core.
           vec2 uv = gl_PointCoord - vec2(0.5);
           float r = length(uv);
           if (r > 0.5) discard;
-          // Soft centre glow
-          float alpha = opacity * (1.0 - smoothstep(0.2, 0.5, r));
+          float alpha = opacity * (1.0 - smoothstep(0.06, 0.5, r));
           gl_FragColor = vec4(vColor, alpha);
         }
       `,

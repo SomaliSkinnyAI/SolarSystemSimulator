@@ -5,8 +5,17 @@ import { CelestialBody } from '../physics/CelestialBody';
 import { PhysicsEngine } from '../physics/PhysicsEngine';
 import { SceneManager } from '../rendering/SceneManager';
 import { BodySelector } from './BodySelector';
-import { formatDistance, formatVelocity, formatMass, formatTime, escapeVelocity } from '../utils/MathUtils';
+import {
+  formatDistance,
+  formatVelocity,
+  formatMass,
+  formatTime,
+  escapeVelocity,
+  lagrangeL1Distance,
+  orbitalElementsFromState,
+} from '../utils/MathUtils';
 import { G_REAL, G_EXAGGERATED } from '../utils/MathUtils';
+import { estimateHohmannTransfer } from '../utils/TransferPlanner';
 
 // ---------------------------------------------------------------------------
 // UIManager — Tweakpane v4 control panels
@@ -57,6 +66,8 @@ export class UIManager {
 
   // Body proxy object for sliders
   private bodyProxy = { mass: 1e24, radius: 1e7, vx: 0, vy: 0, vz: 0 };
+  private readonly intFormat = (v: number) => Number.isFinite(v) ? v.toFixed(0) : '--';
+  private readonly fixed2Format = (v: number) => Number.isFinite(v) ? v.toFixed(2) : '--';
 
   // Planet data card elements
   private planetCard: HTMLElement;
@@ -302,6 +313,8 @@ export class UIManager {
     page.addBinding(this.renderConfig, 'showGravityField', { label: 'Gravity Field' })
       .on('change', () => this.sceneManager.applyRenderConfig(this.renderConfig));
 
+    page.addBinding(this.renderConfig, 'showAtmospheres', { label: 'Atmospheres' });
+
     page.addBlade({ view: 'separator' });
 
     page.addButton({ title: '📷 Screenshot' }).on('click', () => {
@@ -319,8 +332,8 @@ export class UIManager {
     this.infoBindings = [];
 
     this.infoBindings.push(
-      page.addBinding(this.info, 'fps',         { label: 'FPS',      readonly: true }),
-      page.addBinding(this.info, 'bodyCount',   { label: 'Bodies',   readonly: true }),
+      page.addBinding(this.info, 'fps',         { label: 'FPS',      readonly: true, step: 1, format: this.intFormat }),
+      page.addBinding(this.info, 'bodyCount',   { label: 'Bodies',   readonly: true, step: 1, format: this.intFormat }),
       page.addBinding(this.info, 'simTime',     { label: 'Sim Time', readonly: true }),
       page.addBinding(this.info, 'simDate',     { label: 'Date',     readonly: true }),
       page.addBinding(this.info, 'overloaded',  { label: '⚠ Overld', readonly: true }),
@@ -330,10 +343,10 @@ export class UIManager {
 
     this.infoBindings.push(
       page.addBinding(this.info, 'selectedName',     { label: 'Selected', readonly: true }),
-      page.addBinding(this.info, 'selectedVelocity', { label: 'Speed',    readonly: true }),
-      page.addBinding(this.info, 'selectedDistance', { label: 'Dist Sun', readonly: true }),
-      page.addBinding(this.info, 'selectedPeriod',   { label: 'Period',   readonly: true }),
-      page.addBinding(this.info, 'selectedEscapeV',  { label: 'Esc.Vel', readonly: true }),
+      page.addBinding(this.info, 'selectedVelocity', { label: 'Speed',    readonly: true, step: 0.01, format: this.fixed2Format }),
+      page.addBinding(this.info, 'selectedDistance', { label: 'Dist Sun', readonly: true, step: 0.01, format: this.fixed2Format }),
+      page.addBinding(this.info, 'selectedPeriod',   { label: 'Period',   readonly: true, step: 0.01, format: this.fixed2Format }),
+      page.addBinding(this.info, 'selectedEscapeV',  { label: 'Esc.Vel',  readonly: true, step: 0.01, format: this.fixed2Format }),
     );
   }
 
@@ -467,6 +480,7 @@ export class UIManager {
 
     const s = selected.state;
     const sun = bodies.find(b => b.state.id === 'sun') ?? null;
+    const earth = bodies.find(b => b.state.id === 'earth') ?? null;
     const color = '#' + s.color.toString(16).padStart(6, '0');
 
     // Accent bar color
@@ -508,6 +522,42 @@ export class UIManager {
       ['Orb. Period',  periodStr],
       ['Esc. Vel.',    formatVelocity(escV)],
     ];
+
+    if (sun && s.id !== 'sun') {
+      const rel = s.position.clone().sub(sun.state.position);
+      const relVel = s.velocity.clone().sub(sun.state.velocity);
+      const elements = orbitalElementsFromState(
+        this.simConfig.G, sun.state.mass,
+        rel.x, rel.y, rel.z,
+        relVel.x, relVel.y, relVel.z
+      );
+      rows.push(
+        ['Eccentricity', elements.eccentricity.toFixed(3)],
+        ['Inclination', `${(elements.inclination * 180 / Math.PI).toFixed(2)}°`],
+        ['Hill Sphere', formatDistance(lagrangeL1Distance(sun.state.mass, s.mass, distFromSun))],
+      );
+      if (elements.bound) {
+        rows.push(
+          ['Perihelion', formatDistance(elements.periapsis)],
+          ['Aphelion', formatDistance(elements.apoapsis)],
+        );
+      } else {
+        rows.push(['Trajectory', 'Unbound']);
+      }
+    }
+
+    if (sun && earth && s.id !== 'sun' && s.id !== 'earth' && !s.isMoon) {
+      const transfer = estimateHohmannTransfer(sun.state, earth.state, s, G_REAL);
+      if (transfer) {
+        rows.push(
+          ['Hohmann dV', formatVelocity(transfer.deltaVTotal)],
+          ['Flight Time', formatTime(transfer.timeOfFlight)],
+          ['Phase Target', `${transfer.idealPhaseAngleDeg.toFixed(1)}°`],
+          ['Phase Now', `${transfer.currentPhaseAngleDeg.toFixed(1)}°`],
+          ['Window Error', `${transfer.phaseErrorDeg.toFixed(1)}°`],
+        );
+      }
+    }
 
     this.planetCardGrid.innerHTML = rows.map(([label, value]) =>
       `<span class="label">${label}</span><span class="value">${value}</span>`
