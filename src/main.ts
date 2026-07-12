@@ -563,7 +563,20 @@ palette.getItems = (): PaletteItem[] => [
   { label: 'Copy shareable link', kind: 'action', run: copyShareLink },
 ];
 
-void applyShareHash();
+// Boot: a share link's encoded moment wins; otherwise open at the real
+// current date with Horizons-accurate positions, ticking at true real time.
+void (async () => {
+  if (location.hash.includes('d=')) {
+    await applyShareHash();
+    return;
+  }
+  const epoch = new Date();
+  const result = await statesForDate(epoch);
+  ephemerisSource = result.source;
+  rebuildSimulationFromStates(result.states, epoch, true);
+  simConfig.timeScale = 1;
+  ui.setRealTimeEnabled(true);
+})();
 
 // First-visit onboarding: three dismissible tips
 (function onboarding(): void {
