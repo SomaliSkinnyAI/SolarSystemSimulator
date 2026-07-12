@@ -71,6 +71,43 @@ export class BodySelector {
     renderer.domElement.addEventListener('dblclick',  e => this._onDblClick(e));
     renderer.domElement.addEventListener('mousedown', e => this._onMouseDown(e));
     renderer.domElement.addEventListener('mouseup',   e => this._onMouseUp(e));
+
+    // Track pointer travel for ALL pointer types so releasing a camera drag
+    // never counts as a click (deselecting the current body), and implement
+    // touch double-tap (dblclick is unreliable on touch screens).
+    renderer.domElement.addEventListener('pointerdown', e => {
+      this._pointerDownPos = { x: e.clientX, y: e.clientY };
+    });
+    renderer.domElement.addEventListener('pointerup', e => this._onPointerUp(e));
+  }
+
+  private _pointerDownPos: { x: number; y: number } | null = null;
+  private _lastTap: { time: number; x: number; y: number } | null = null;
+
+  private _wasDrag(e: { clientX: number; clientY: number }): boolean {
+    if (!this._pointerDownPos) return false;
+    const dx = e.clientX - this._pointerDownPos.x;
+    const dy = e.clientY - this._pointerDownPos.y;
+    return dx * dx + dy * dy > 36; // 6 px
+  }
+
+  private _onPointerUp(e: PointerEvent): void {
+    if (e.pointerType !== 'touch' || this.godMode || this._wasDrag(e)) return;
+    const now = performance.now();
+    const isDoubleTap = this._lastTap
+      && now - this._lastTap.time < 350
+      && (e.clientX - this._lastTap.x) ** 2 + (e.clientY - this._lastTap.y) ** 2 < 576;
+    const body = this._raycastBodies(e);
+    if (isDoubleTap && body) {
+      this.selectBody(body);
+      this.cameraConfig.focusMode = true;
+      this.cameraConfig.focusBodyId = body.state.id;
+      this.sceneManager.focusOn(body);
+      this._lastTap = null;
+    } else {
+      if (body) this.selectBody(body);
+      this._lastTap = { time: now, x: e.clientX, y: e.clientY };
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -137,6 +174,7 @@ export class BodySelector {
   // ---------------------------------------------------------------------------
   private _onClick(e: MouseEvent): void {
     if (this.godMode) return; // handled in mouseUp
+    if (this._wasDrag(e)) return; // camera drag release, not a click
 
     const body = this._raycastBodies(e);
     if (body) {

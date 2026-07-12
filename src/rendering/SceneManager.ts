@@ -10,6 +10,7 @@ import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRe
 
 import { CelestialBody } from '../physics/CelestialBody';
 import { StarField } from './StarField';
+import { CameraDirector } from './CameraDirector';
 import { RenderConfig, CameraConfig } from '../types';
 import { AU, randRange } from '../utils/MathUtils';
 import { DISPLAY_SCALE, physicsToScene } from '../utils/CoordinateSystem';
@@ -166,6 +167,7 @@ export class SceneManager {
   readonly scene: THREE.Scene;
   readonly camera: THREE.PerspectiveCamera;
   readonly controls: OrbitControls;
+  director!: CameraDirector;
 
   private composer: EffectComposer;
   private bloomPass: UnrealBloomPass;
@@ -255,6 +257,7 @@ export class SceneManager {
     this.controls.minDistance = 0.05;
     this.controls.maxDistance = 5e5;
     this.controls.zoomSpeed = 2.5;
+    this.director = new CameraDirector(this.camera, this.controls);
 
     // Lights
     this.sunLight = new THREE.PointLight(0xFFF5E0, 4.0, 0, 0); // decay=0: constant reach for both log and linear scale
@@ -639,15 +642,16 @@ export class SceneManager {
   // ---------------------------------------------------------------------------
   // Camera focus
   // ---------------------------------------------------------------------------
+  /** Cinematic eased flight to a body (was an instant snap). */
   focusOn(body: CelestialBody | null): void {
-    if (body) {
-      this.controls.target.copy(body.group.position);
-      this.controls.update();
-    }
+    if (!body) return;
+    const displayR = Math.max(body.visualRadius * body.group.scale.x, 0.02);
+    this.director.flyTo(() => body.group.position, displayR * 6.5, { duration: 1.7 });
   }
 
   updateFocus(body: CelestialBody | null): void {
-    if (body) {
+    // While a cinematic flight runs it owns the controls target
+    if (body && !this.director.flying) {
       this.controls.target.copy(body.group.position);
     }
   }

@@ -608,8 +608,275 @@
       body.photo-mode #planet-card,
       body.photo-mode #spawn-panel,
       body.photo-mode #god-mode-hint,
+      body.photo-mode #transport-dock,
+      body.photo-mode #upcoming-panel,
+      body.photo-mode #tour-caption,
       body.photo-mode #crosshair {
         display: none !important;
+      }
+
+      /* ---- Tweakpane reskin: match the dark-glass overlay aesthetic ---- */
+      #ui-root {
+        --tp-base-background-color: rgba(10, 12, 25, 0.82);
+        --tp-base-shadow-color: rgba(0, 0, 0, 0.3);
+        --tp-container-background-color: rgba(45, 55, 90, 0.28);
+        --tp-container-background-color-active: rgba(70, 85, 140, 0.45);
+        --tp-container-background-color-focus: rgba(60, 75, 125, 0.4);
+        --tp-container-background-color-hover: rgba(55, 68, 112, 0.35);
+        --tp-container-foreground-color: #aab4d4;
+        --tp-button-background-color: rgba(60, 75, 125, 0.5);
+        --tp-button-background-color-active: rgba(95, 115, 180, 0.7);
+        --tp-button-background-color-focus: rgba(85, 105, 165, 0.6);
+        --tp-button-background-color-hover: rgba(75, 92, 150, 0.55);
+        --tp-button-foreground-color: #dde4f5;
+        --tp-input-background-color: rgba(20, 25, 45, 0.7);
+        --tp-input-background-color-active: rgba(30, 38, 66, 0.8);
+        --tp-input-background-color-focus: rgba(28, 35, 60, 0.8);
+        --tp-input-background-color-hover: rgba(25, 31, 54, 0.75);
+        --tp-input-foreground-color: #cdd6ee;
+        --tp-label-foreground-color: #91a8c8;
+        --tp-monitor-background-color: rgba(20, 25, 45, 0.6);
+        --tp-monitor-foreground-color: #93d3a2;
+      }
+
+      /* ---- Transport dock (bottom centre) ---- */
+      #transport-dock {
+        position: fixed;
+        bottom: 12px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 220;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        align-items: center;
+        font-family: 'Courier New', monospace;
+      }
+      #timeline-row {
+        position: relative;
+        width: min(560px, 72vw);
+        height: 18px;
+      }
+      #timeline-slider {
+        width: 100%;
+        height: 4px;
+        margin: 7px 0;
+        appearance: none;
+        background: rgba(90, 110, 170, 0.35);
+        border-radius: 2px;
+        outline: none;
+        cursor: pointer;
+      }
+      #timeline-slider::-webkit-slider-thumb {
+        appearance: none;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: #cdd6ee;
+        border: 1px solid rgba(120, 140, 200, 0.8);
+        cursor: grab;
+      }
+      .timeline-tick {
+        position: absolute;
+        top: 2px;
+        width: 4px;
+        height: 4px;
+        border-radius: 50%;
+        transform: translateX(-50%);
+        pointer-events: auto;
+        cursor: pointer;
+      }
+      .timeline-tick.solar-eclipse  { background: #ffd257; box-shadow: 0 0 4px #ffd257; }
+      .timeline-tick.lunar-eclipse  { background: #ff8f6b; }
+      .timeline-tick.conjunction    { background: #7fb4ff; }
+      .timeline-tick.opposition     { background: #93d3a2; }
+      #transport-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 7px 14px;
+        border-radius: 999px;
+        background: rgba(10, 12, 25, 0.82);
+        border: 1px solid rgba(120, 140, 200, 0.25);
+        backdrop-filter: blur(8px);
+        color: #cdd6ee;
+        font-size: 12px;
+      }
+      #transport-row button {
+        background: rgba(60, 75, 125, 0.5);
+        color: #dde4f5;
+        border: none;
+        border-radius: 6px;
+        font-family: inherit;
+        font-size: 12px;
+        padding: 3px 9px;
+        cursor: pointer;
+      }
+      #transport-row button:hover { background: rgba(95, 115, 180, 0.7); }
+      #tb-speed { min-width: 120px; text-align: center; color: #93d3a2; }
+      #tb-date  { min-width: 88px; text-align: center; cursor: pointer; }
+      #tb-date:hover { color: #fff; }
+
+      /* ---- Upcoming events panel (right side, under live scan) ---- */
+      #upcoming-panel {
+        position: fixed;
+        top: 210px;
+        right: 10px;
+        z-index: 210;
+        width: 250px;
+        max-height: 42vh;
+        overflow-y: auto;
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: rgba(10, 12, 25, 0.82);
+        border: 1px solid rgba(120, 140, 200, 0.25);
+        backdrop-filter: blur(8px);
+        font-family: 'Courier New', monospace;
+        font-size: 11px;
+        color: #aab4d4;
+      }
+      #upcoming-panel .up-title {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 10px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: #7f8cb0;
+        margin-bottom: 6px;
+      }
+      #upcoming-panel button {
+        background: rgba(60, 75, 125, 0.5);
+        color: #dde4f5;
+        border: none;
+        border-radius: 5px;
+        font-family: inherit;
+        font-size: 10px;
+        padding: 2px 8px;
+        cursor: pointer;
+      }
+      #upcoming-panel button:hover { background: rgba(95, 115, 180, 0.7); }
+      .up-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 6px;
+        padding: 4px 4px;
+        border-radius: 5px;
+        cursor: pointer;
+      }
+      .up-row:hover { background: rgba(60, 75, 125, 0.35); }
+      .up-row .up-label { color: #cdd6ee; }
+      .up-row .up-date  { color: #7f8cb0; white-space: nowrap; }
+      .up-row.solar-eclipse .up-label { color: #ffd257; }
+      .up-row.lunar-eclipse .up-label { color: #ff8f6b; }
+
+      /* ---- Grand tour caption bar ---- */
+      #tour-caption {
+        position: fixed;
+        bottom: 86px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 230;
+        max-width: min(620px, 86vw);
+        padding: 12px 18px;
+        border-radius: 12px;
+        background: rgba(10, 12, 25, 0.86);
+        border: 1px solid rgba(120, 140, 200, 0.3);
+        backdrop-filter: blur(10px);
+        font-family: 'Courier New', monospace;
+        color: #cdd6ee;
+        font-size: 13px;
+        display: none;
+        text-align: center;
+      }
+      #tour-caption.visible { display: block; }
+      #tour-caption .tour-title { color: #ffd257; font-size: 15px; margin-bottom: 4px; }
+      #tour-caption .tour-nav { margin-top: 8px; display: flex; gap: 8px; justify-content: center; }
+      #tour-caption button {
+        background: rgba(60, 75, 125, 0.5);
+        color: #dde4f5;
+        border: none;
+        border-radius: 6px;
+        font-family: inherit;
+        padding: 3px 12px;
+        cursor: pointer;
+      }
+
+      /* ---- Command palette ---- */
+      #palette-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 380;
+        background: rgba(0, 0, 0, 0.35);
+        display: none;
+      }
+      #palette {
+        position: fixed;
+        top: 18vh;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 390;
+        width: min(440px, 86vw);
+        border-radius: 12px;
+        background: rgba(12, 15, 30, 0.94);
+        border: 1px solid rgba(120, 140, 200, 0.35);
+        backdrop-filter: blur(12px);
+        font-family: 'Courier New', monospace;
+        display: none;
+        overflow: hidden;
+      }
+      #palette input {
+        width: 100%;
+        box-sizing: border-box;
+        background: transparent;
+        border: none;
+        border-bottom: 1px solid rgba(120, 140, 200, 0.25);
+        outline: none;
+        color: #dde4f5;
+        font-family: inherit;
+        font-size: 14px;
+        padding: 12px 14px;
+      }
+      #palette-results { max-height: 300px; overflow-y: auto; }
+      .palette-row {
+        padding: 8px 14px;
+        color: #aab4d4;
+        font-size: 12px;
+        cursor: pointer;
+        display: flex;
+        justify-content: space-between;
+      }
+      .palette-row.active, .palette-row:hover { background: rgba(60, 75, 125, 0.4); color: #fff; }
+      .palette-row .palette-kind { color: #7f8cb0; font-size: 10px; }
+
+      /* ---- Shortcut cheat sheet ---- */
+      #cheatsheet {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        z-index: 390;
+        padding: 18px 24px;
+        border-radius: 12px;
+        background: rgba(12, 15, 30, 0.94);
+        border: 1px solid rgba(120, 140, 200, 0.35);
+        font-family: 'Courier New', monospace;
+        color: #cdd6ee;
+        font-size: 12px;
+        display: none;
+      }
+      #cheatsheet.visible { display: block; }
+      #cheatsheet h3 { margin: 0 0 10px; color: #ffd257; font-size: 13px; letter-spacing: 0.1em; }
+      #cheatsheet .keys { display: grid; grid-template-columns: auto auto; gap: 4px 18px; }
+      #cheatsheet .k { color: #93d3a2; }
+      .card-fact {
+        margin-top: 8px;
+        padding-top: 8px;
+        border-top: 1px solid rgba(120, 140, 200, 0.2);
+        color: #9fb0d8;
+        font-size: 11px;
+        line-height: 1.5;
+        font-style: italic;
       }
       #photo-mode-hint {
         position: fixed;
@@ -635,7 +902,7 @@
     <div id="canvas-container"></div>
     <div id="label-container"></div>
     <div id="ui-root"></div>
-    <div id="hud"></div>
+    <div id="hud">? shortcuts · Ctrl+K search · G god mode · double-click to focus</div>
     <div id="scale-legend"></div>
     <div id="event-panel"></div>
     <div id="crosshair"></div>
@@ -739,6 +1006,57 @@
 
     <div id="god-mode-hint">GOD MODE — Click in the scene to place a body</div>
     <div id="photo-mode-hint">PHOTO MODE — P exit · S save 2× capture</div>
+    <div id="transport-dock">
+      <div id="timeline-row">
+        <input type="range" id="timeline-slider" min="0" max="10000" value="0" />
+        <div id="timeline-ticks"></div>
+      </div>
+      <div id="transport-row">
+        <button id="tb-play" title="Play / pause (Space)">⏸</button>
+        <button id="tb-slower" title="Slower">−</button>
+        <span id="tb-speed">—</span>
+        <button id="tb-faster" title="Faster">+</button>
+        <span id="tb-date" title="Click to pick a date">—</span>
+        <button id="tb-tour" title="Guided tour">▶ Tour</button>
+        <button id="tb-link" title="Copy shareable link">🔗</button>
+      </div>
+    </div>
+    <div id="upcoming-panel">
+      <div class="up-title"><span>Upcoming Events</span><button id="up-scan">Scan 2 yrs</button></div>
+      <div id="up-list"><div style="color:#5a6685">Press Scan to search eclipses, conjunctions & oppositions from the current sim date.</div></div>
+    </div>
+    <div id="tour-caption">
+      <div class="tour-title"></div>
+      <div class="tour-text"></div>
+      <div class="tour-nav">
+        <button id="tour-prev">◀ Prev</button>
+        <button id="tour-next">Next ▶</button>
+        <button id="tour-exit">Exit</button>
+      </div>
+    </div>
+    <div id="palette-backdrop"></div>
+    <div id="palette">
+      <input id="palette-input" type="text" placeholder="Jump to body or action…" autocomplete="off" />
+      <div id="palette-results"></div>
+    </div>
+    <div id="cheatsheet">
+      <h3>KEYBOARD SHORTCUTS</h3>
+      <div class="keys">
+        <span class="k">Space</span><span>Pause / resume</span>
+        <span class="k">F</span><span>Focus mode</span>
+        <span class="k">G</span><span>God mode</span>
+        <span class="k">T</span><span>Trails</span>
+        <span class="k">B</span><span>Bloom</span>
+        <span class="k">L</span><span>Log scale</span>
+        <span class="k">P</span><span>Photo mode</span>
+        <span class="k">S</span><span>Save photo (in photo mode)</span>
+        <span class="k">M</span><span>Mute audio</span>
+        <span class="k">R</span><span>Reset simulation</span>
+        <span class="k">Ctrl+K or /</span><span>Command palette</span>
+        <span class="k">Esc</span><span>Deselect / close</span>
+        <span class="k">?</span><span>This cheat sheet</span>
+      </div>
+    </div>
     <div id="planet-card">
       <div class="card-accent"></div>
       <div class="card-header"></div>

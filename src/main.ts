@@ -10,6 +10,12 @@ import { CelestialBody } from './physics/CelestialBody';
 import { selectOccluders, updateEclipseUniforms } from './rendering/EclipseShadows';
 import { CometTail } from './rendering/CometTail';
 import { AU } from './utils/MathUtils';
+import { TransportBar } from './ui/TransportBar';
+import { EventsPanel } from './ui/EventsPanel';
+import { TourController } from './ui/TourController';
+import { CommandPalette, PaletteItem } from './ui/CommandPalette';
+import { AudioManager } from './audio/AudioManager';
+import { UpcomingEvent } from './utils/EventPredictor';
 import { PhysicsEngine } from './physics/PhysicsEngine';
 import { SceneManager } from './rendering/SceneManager';
 import { TrailRenderer } from './rendering/TrailRenderer';
@@ -115,6 +121,10 @@ function onBodyGone(id: string): void {
 }
 
 physics.onBodyRemoved = onBodyGone;
+physics.onBodyMerged = (survivorId) => {
+  const survivor = physics.bodies.find(b => b.state.id === survivorId);
+  audio.mergeBoom(survivor?.state.mass ?? 1e20);
+};
 
 // ---------------------------------------------------------------------------
 // Build asteroid belt (after scene is set up)
@@ -135,11 +145,17 @@ const bodySelector = new BodySelector(
 );
 
 bodySelector.onBodySelected = (body) => {
+  if (body) audio.selectPing();
   if (cameraConfig.focusMode && body) {
     cameraConfig.focusBodyId = body.state.id;
     sceneManager.focusOn(body);
   }
 };
+
+// Grabbing the mouse cancels any cinematic camera flight
+sceneManager.renderer.domElement.addEventListener('pointerdown', () => {
+  sceneManager.director.cancel();
+});
 
 // ---------------------------------------------------------------------------
 // Spawn panel (God Mode configuration)
@@ -152,6 +168,7 @@ bodySelector.onGodModeClick = (scenePos, physicsPos) => {
 };
 
 spawnPanel.onSpawn = (req) => {
+  audio.spawnThump();
   const id = nextBodyId();
   const state = {
     id,
@@ -180,6 +197,9 @@ spawnPanel.onSpawn = (req) => {
   bodies = physics.bodies;
   sceneManager.clearLabels();
   buildAllLabels();
+  // Spawned bodies get a predicted orbit ring like everyone else
+  sceneManager.clearOrbitRings();
+  sceneManager.buildOrbitRings(bodies, renderConfig.realScale);
 };
 
 // ---------------------------------------------------------------------------
@@ -229,6 +249,10 @@ function disposeCurrentBodies(): void {
 
 function attachPhysicsCallbacks(): void {
   physics.onBodyRemoved = onBodyGone;
+  physics.onBodyMerged = (survivorId) => {
+    const survivor = physics.bodies.find(b => b.state.id === survivorId);
+    audio.mergeBoom(survivor?.state.mass ?? 1e20);
+  };
 }
 
 function createBodiesFromStates(states: ReturnType<typeof computeBodiesForDate>, rotationDate?: Date): void {
@@ -362,6 +386,216 @@ ui.onRealTimeToggle = async (enabled) => {
 
   sceneManager.resetCamera(renderConfig.logScale);
 };
+
+// ---------------------------------------------------------------------------
+// Audio, transport bar, timeline, events, tour, palette, share links
+// ---------------------------------------------------------------------------
+const audio = new AudioManager();
+ui.onMuteToggle = () => audio.toggleMuted();
+
+// In-place date application: light enough for 60 Hz timeline scrubbing —
+// copies positions/velocities into the existing bodies instead of the full
+// dispose-and-rebuild the date picker uses.
+let scrubBusy = false;
+let pendingScrubDate: Date | null = null;
+let scrubPausedBefore = false;
+
+async function applyDateInPlace(date: Date): Promise<void> {
+  if (scrubBusy) {
+    pendingScrubDate = date;
+    return;
+  }
+  scrubBusy = true;
+  try {
+    const result = await statesForDate(date);
+    const byId = new Map(result.states.map(s => [s.id, s]));
+    const sameRoster = bodies.length === result.states.length
+      && bodies.every(b => byId.has(b.state.id));
+    ephemerisSource = result.source;
+    if (sameRoster) {
+      for (const b of bodies) {
+        const s = byId.get(b.state.id)!;
+        b.state.position.copy(s.position);
+        b.state.velocity.copy(s.velocity);
+      }
+      simEpoch = date;
+      simTimeElapsed = 0;
+      realTimeMode = true;
+      trailRenderer.clearAll();
+      trailLastPos.clear();
+    } else {
+      rebuildSimulationFromStates(result.states, date, true);
+    }
+    ui.setRealTimeEnabled(true);
+  } finally {
+    scrubBusy = false;
+    if (pendingScrubDate) {
+      const next = pendingScrubDate;
+      pendingScrubDate = null;
+      void applyDateInPlace(next);
+    }
+  }
+}
+
+function jumpToEvent(ev: UpcomingEvent): void {
+  void (async () => {
+    // Arrive an hour early at watchable speed so the event unfolds on screen
+    await applyDateInPlace(new Date(ev.date.getTime() - 3600e3));
+    simConfig.timeScale = 600;
+    simConfig.paused = false;
+    const body = bodies.find(b => b.state.id === ev.focusBodyId);
+    const sunBody = bodies.find(b => b.state.id === 'sun');
+    if (!body) return;
+    bodySelector.selectBody(body);
+    cameraConfig.focusMode = true;
+    cameraConfig.focusBodyId = body.state.id;
+    let offsetDir: THREE.Vector3 | undefined;
+    if (ev.type === 'solar-eclipse' && sunBody) {
+      // Hover sunward of Earth to watch the Moon's shadow cross the day side
+      offsetDir = sunBody.group.position.clone().sub(body.group.position).normalize();
+    } else if (ev.type === 'lunar-eclipse' && sunBody) {
+      // Anti-sunward of the Moon so it is seen entering Earth's shadow
+      offsetDir = body.group.position.clone().sub(sunBody.group.position).normalize();
+    }
+    const displayR = Math.max(body.visualRadius * body.group.scale.x, 0.02);
+    sceneManager.director.flyTo(
+      () => body.group.position,
+      displayR * (ev.type.includes('eclipse') ? 4.5 : 7),
+      { duration: 2.2, ...(offsetDir ? { offsetDir } : {}) }
+    );
+  })();
+}
+
+function copyShareLink(): void {
+  const p = sceneManager.camera.position;
+  const t = sceneManager.controls.target;
+  const params = new URLSearchParams();
+  params.set('d', simDate.toISOString());
+  if (realTimeMode) params.set('rt', '1');
+  params.set('c', [p.x, p.y, p.z, t.x, t.y, t.z].map(v => v.toFixed(3)).join(','));
+  if (cameraConfig.focusBodyId) params.set('f', cameraConfig.focusBodyId);
+  params.set('ts', String(simConfig.timeScale));
+  const flags = (renderConfig.logScale ? 1 : 0)
+    | (renderConfig.realScale ? 2 : 0)
+    | (renderConfig.showTrails ? 4 : 0);
+  params.set('fl', String(flags));
+  const url = `${location.origin}${location.pathname}#${params.toString()}`;
+  void navigator.clipboard?.writeText(url);
+  audio.uiTick();
+}
+
+async function applyShareHash(): Promise<void> {
+  if (!location.hash.includes('d=')) return;
+  try {
+    const params = new URLSearchParams(location.hash.slice(1));
+    const dStr = params.get('d');
+    if (params.get('rt') === '1' && dStr && !isNaN(Date.parse(dStr))) {
+      await applyDateInPlace(new Date(dStr));
+    }
+    const ts = Number(params.get('ts'));
+    if (Number.isFinite(ts) && ts >= 1) simConfig.timeScale = ts;
+    const fl = Number(params.get('fl') ?? 0);
+    renderConfig.logScale = !!(fl & 1);
+    renderConfig.realScale = !!(fl & 2);
+    renderConfig.showTrails = !!(fl & 4);
+    const c = params.get('c')?.split(',').map(Number);
+    if (c && c.length === 6 && c.every(Number.isFinite)) {
+      sceneManager.camera.position.set(c[0]!, c[1]!, c[2]!);
+      sceneManager.controls.target.set(c[3]!, c[4]!, c[5]!);
+      sceneManager.controls.update();
+    }
+    const f = params.get('f');
+    if (f) {
+      const b = bodies.find(x => x.state.id === f);
+      if (b) {
+        cameraConfig.focusMode = true;
+        cameraConfig.focusBodyId = f;
+        bodySelector.selectBody(b);
+      }
+    }
+  } catch { /* malformed hash — start normally */ }
+}
+
+const transportBar = new TransportBar(simConfig);
+transportBar.onScrubStart = () => {
+  scrubPausedBefore = simConfig.paused;
+  simConfig.paused = true;
+};
+transportBar.onScrub = (date) => { void applyDateInPlace(date); };
+transportBar.onScrubEnd = () => { simConfig.paused = scrubPausedBefore; };
+transportBar.onDateClick = () => document.getElementById('date-overlay')?.click();
+transportBar.onCopyLink = copyShareLink;
+transportBar.onEventJump = jumpToEvent;
+
+const eventsPanel = new EventsPanel();
+eventsPanel.getStartDate = () => new Date(simDate);
+eventsPanel.onJump = jumpToEvent;
+eventsPanel.onEventsChanged = (events) => transportBar.setEvents(events);
+
+const tour = new TourController(sceneManager, () => bodies);
+tour.onSelectBody = (b) => {
+  bodySelector.selectBody(b);
+  cameraConfig.focusMode = true;
+  cameraConfig.focusBodyId = b.state.id;
+};
+transportBar.onTour = () => (tour.active ? tour.stop() : tour.start());
+
+const palette = new CommandPalette();
+palette.getItems = (): PaletteItem[] => [
+  ...bodies.map(b => ({
+    label: b.state.name,
+    kind: 'body' as const,
+    run: () => {
+      bodySelector.selectBody(b);
+      cameraConfig.focusMode = true;
+      cameraConfig.focusBodyId = b.state.id;
+      sceneManager.focusOn(b);
+    },
+  })),
+  { label: 'Toggle pause', kind: 'action', run: () => { simConfig.paused = !simConfig.paused; } },
+  { label: 'Toggle trails', kind: 'action', run: () => { renderConfig.showTrails = !renderConfig.showTrails; } },
+  { label: 'Toggle real scale', kind: 'action', run: () => { renderConfig.realScale = !renderConfig.realScale; } },
+  { label: 'Toggle log scale', kind: 'action', run: () => { renderConfig.logScale = !renderConfig.logScale; } },
+  { label: 'Photo mode', kind: 'action', run: () => ui.togglePhotoMode() },
+  { label: 'Start grand tour', kind: 'action', run: () => tour.start() },
+  { label: 'Scan upcoming events', kind: 'action', run: () => void eventsPanel.scan() },
+  { label: 'Reset simulation', kind: 'action', run: () => ui.onReset?.() },
+  { label: 'Copy shareable link', kind: 'action', run: copyShareLink },
+];
+
+void applyShareHash();
+
+// First-visit onboarding: three dismissible tips
+(function onboarding(): void {
+  if (localStorage.getItem('sss-onboarded')) return;
+  const tips = [
+    'Drag to orbit · scroll to zoom · right-drag to pan',
+    'Click any planet for its data card · double-click to fly there',
+    'Click the date to time-travel · ? for shortcuts · Ctrl+K to search',
+  ];
+  const el = document.createElement('div');
+  Object.assign(el.style, {
+    position: 'fixed', bottom: '96px', left: '50%', transform: 'translateX(-50%)',
+    zIndex: '500', padding: '8px 18px', borderRadius: '999px',
+    background: 'rgba(10,12,25,0.88)', border: '1px solid rgba(120,140,200,0.35)',
+    color: '#cdd6ee', fontFamily: "'Courier New', monospace", fontSize: '12px',
+    pointerEvents: 'none',
+  });
+  let idx = 0;
+  el.textContent = `${tips[0]}  (click to continue)`;
+  document.body.appendChild(el);
+  const advance = (): void => {
+    idx++;
+    if (idx >= tips.length) {
+      el.remove();
+      window.removeEventListener('pointerdown', advance);
+      localStorage.setItem('sss-onboarded', '1');
+      return;
+    }
+    el.textContent = `${tips[idx]}  (click to continue)`;
+  };
+  window.addEventListener('pointerdown', advance);
+})();
 
 // ---------------------------------------------------------------------------
 // Animation loop
@@ -553,12 +787,19 @@ function animate(): void {
 
   // (God Mode spawn is handled by SpawnPanel callback)
 
+  // --- Cinematic camera flights ---
+  sceneManager.director.update(wallDt);
+
   // --- Selection ring ---
   bodySelector.update();
 
   // --- Update simulation date ---
   simDate = new Date(simEpoch.getTime() + simTimeElapsed * 1000);
   dateOverlay.updateDisplay(simDate);
+  transportBar.update(simDate, simConfig.paused);
+  if (sun) {
+    audio.updateListener(sceneManager.camera.position.distanceTo(sun.group.position));
+  }
   if (scaleLegend) {
     const scaleMode = renderConfig.realScale
       ? 'True body radii'

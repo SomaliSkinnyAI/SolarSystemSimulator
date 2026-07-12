@@ -16,6 +16,7 @@ import {
 } from '../utils/MathUtils';
 import { G_REAL, G_EXAGGERATED } from '../utils/MathUtils';
 import { estimateHohmannTransfer } from '../utils/TransferPlanner';
+import { BODY_FACTS } from '../data/bodyFacts';
 
 // ---------------------------------------------------------------------------
 // UIManager — Tweakpane v4 control panels
@@ -35,6 +36,13 @@ export class UIManager {
   onDeleteBody?: (id: string) => void;
   onRealTimeToggle?: (enabled: boolean) => void;
   onGodModeToggle?: (active: boolean) => void;
+  onMuteToggle?: () => void;
+
+  // Discovery-mode fact rotation state
+  private factEl!: HTMLElement;
+  private factBodyId: string | null = null;
+  private factIdx = 0;
+  private factShownAt = 0;
 
   // Real-time proxy — shared with Tweakpane binding
   private realTimeProxy = { enabled: false };
@@ -102,6 +110,12 @@ export class UIManager {
     this.planetCardAccent = this.planetCard.querySelector('.card-accent')!;
     this.planetCardHeader = this.planetCard.querySelector('.card-header')!;
     this.planetCardGrid   = this.planetCard.querySelector('.card-grid')!;
+
+    // Discovery-mode fact strip under the data grid
+    this.factEl = document.createElement('div');
+    this.factEl.className = 'card-fact';
+    this.factEl.style.display = 'none';
+    this.planetCard.appendChild(this.factEl);
 
     this._buildTabs();
     this._buildKeyboard();
@@ -420,11 +434,23 @@ export class UIManager {
             this._savePhotoCapture();
           }
           break;
-        case 'Escape':
+        case 'm': case 'M':
+          this.onMuteToggle?.();
+          break;
+        case '?':
+          document.getElementById('cheatsheet')?.classList.toggle('visible');
+          break;
+        case 'Escape': {
+          const sheet = document.getElementById('cheatsheet');
+          if (sheet?.classList.contains('visible')) {
+            sheet.classList.remove('visible');
+            break;
+          }
           this.bodySelector.deselectBody();
           this.bodySelector.setGodMode(false);
           this.onGodModeToggle?.(false);
           break;
+        }
       }
       this.pane.refresh();
     });
@@ -598,6 +624,34 @@ export class UIManager {
     this.planetCardGrid.innerHTML = rows.map(([label, value]) =>
       `<span class="label">${label}</span><span class="value">${value}</span>`
     ).join('');
+
+    // Discovery facts: rotate every 8 s, plus a live volume comparison
+    const facts = BODY_FACTS[s.id];
+    if (facts && facts.length > 0) {
+      const now = Date.now();
+      if (this.factBodyId !== s.id) {
+        this.factBodyId = s.id;
+        this.factIdx = 0;
+        this.factShownAt = now;
+      } else if (now - this.factShownAt > 8000) {
+        this.factIdx = (this.factIdx + 1) % facts.length;
+        this.factShownAt = now;
+      }
+      let scaleLine = '';
+      if (earth && s.id !== 'earth' && s.radius > 0) {
+        const ratio = (s.radius / earth.state.radius) ** 3;
+        if (ratio >= 1.05) {
+          scaleLine = ` — ${ratio >= 100 ? ratio.toFixed(0) : ratio.toFixed(1)} Earths would fit inside`;
+        } else if (ratio <= 0.95) {
+          const inv = 1 / ratio;
+          scaleLine = ` — ${inv >= 100 ? inv.toFixed(0) : inv.toFixed(1)}× would fit inside Earth`;
+        }
+      }
+      this.factEl.textContent = facts[this.factIdx] + scaleLine;
+      this.factEl.style.display = 'block';
+    } else {
+      this.factEl.style.display = 'none';
+    }
 
     this.planetCard.classList.add('visible');
   }
