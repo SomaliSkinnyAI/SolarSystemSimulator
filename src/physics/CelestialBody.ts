@@ -113,9 +113,78 @@ const GAS_GIANT_STRIPES: Record<string, [number, number]> = {
 };
 
 // ---------------------------------------------------------------------------
+// Ring systems. Saturn uses its texture asset; Jupiter/Uranus/Neptune use
+// procedural radial strip textures built from real ring radii (planet radii).
+// Uranus's near-vertical hoops come free from its 98° axial tilt.
+// ---------------------------------------------------------------------------
+interface RingStrip { r0: number; r1: number; color: number; alpha: number }
+interface RingSpec  { innerR: number; outerR: number; opacity: number; strips: RingStrip[] }
+
+const RING_SPECS: Record<string, RingSpec> = {
+  jupiter: {
+    innerR: 1.40, outerR: 1.82, opacity: 0.30,
+    strips: [
+      { r0: 1.40, r1: 1.71, color: 0x8a7a66, alpha: 0.05 },  // halo (very faint)
+      { r0: 1.71, r1: 1.81, color: 0xa89478, alpha: 0.16 },  // main ring
+    ],
+  },
+  uranus: {
+    innerR: 1.60, outerR: 2.01, opacity: 0.85,
+    strips: [
+      { r0: 1.637, r1: 1.644, color: 0x3c3c42, alpha: 0.45 }, // ring 6
+      { r0: 1.652, r1: 1.659, color: 0x3c3c42, alpha: 0.45 }, // ring 5
+      { r0: 1.666, r1: 1.673, color: 0x3c3c42, alpha: 0.45 }, // ring 4
+      { r0: 1.750, r1: 1.760, color: 0x46464c, alpha: 0.55 }, // alpha
+      { r0: 1.786, r1: 1.796, color: 0x46464c, alpha: 0.55 }, // beta
+      { r0: 1.834, r1: 1.840, color: 0x404046, alpha: 0.50 }, // eta
+      { r0: 1.863, r1: 1.869, color: 0x48484e, alpha: 0.55 }, // gamma
+      { r0: 1.900, r1: 1.907, color: 0x48484e, alpha: 0.55 }, // delta
+      { r0: 1.958, r1: 2.006, color: 0x55555c, alpha: 0.75 }, // epsilon (brightest)
+    ],
+  },
+  neptune: {
+    innerR: 1.65, outerR: 2.56, opacity: 0.55,
+    strips: [
+      { r0: 1.677, r1: 1.712, color: 0x5a5450, alpha: 0.12 }, // Galle
+      { r0: 2.135, r1: 2.148, color: 0x6a625c, alpha: 0.30 }, // Le Verrier
+      { r0: 2.148, r1: 2.310, color: 0x554f4a, alpha: 0.08 }, // Lassell plateau
+      { r0: 2.525, r1: 2.545, color: 0x746a62, alpha: 0.40 }, // Adams
+    ],
+  },
+};
+
+function makeRingStripTexture(spec: RingSpec): THREE.DataTexture {
+  const W = 1024;
+  const data = new Uint8Array(W * 4);
+  for (let x = 0; x < W; x++) {
+    const r = spec.innerR + (x / (W - 1)) * (spec.outerR - spec.innerR);
+    let cr = 0, cg = 0, cb = 0, ca = 0;
+    for (const s of spec.strips) {
+      if (r >= s.r0 && r <= s.r1) {
+        // Soft edges within each strip
+        const w = s.r1 - s.r0;
+        const t = Math.min((r - s.r0) / w, (s.r1 - r) / w) * 2;
+        const soft = Math.min(1, t * 3);
+        cr = (s.color >> 16) & 0xff;
+        cg = (s.color >> 8) & 0xff;
+        cb = s.color & 0xff;
+        ca = Math.max(ca, s.alpha * soft * 255);
+      }
+    }
+    data[x * 4] = cr; data[x * 4 + 1] = cg; data[x * 4 + 2] = cb; data[x * 4 + 3] = Math.round(ca);
+  }
+  const tex = new THREE.DataTexture(data, W, 1, THREE.RGBAFormat);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+// ---------------------------------------------------------------------------
 // Earth day/night shader
 // ---------------------------------------------------------------------------
 const EARTH_VERT = /* glsl */`
+  #include <common>
+  #include <logdepthbuf_pars_vertex>
   varying vec2 vUv;
   varying vec3 vNormal;
   varying vec3 vWorldNormal;
@@ -124,10 +193,13 @@ const EARTH_VERT = /* glsl */`
     vNormal = normalize(normalMatrix * normal);
     vWorldNormal = normalize((modelMatrix * vec4(normal, 0.0)).xyz);
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    #include <logdepthbuf_vertex>
   }
 `;
 
 const EARTH_FRAG = /* glsl */`
+  #include <common>
+  #include <logdepthbuf_pars_fragment>
   uniform sampler2D dayMap;
   uniform sampler2D nightMap;
   uniform vec3 sunDir;
@@ -135,6 +207,7 @@ const EARTH_FRAG = /* glsl */`
   varying vec3 vNormal;
   varying vec3 vWorldNormal;
   void main() {
+    #include <logdepthbuf_fragment>
     float intensity = dot(vWorldNormal, normalize(sunDir));
     float blend = smoothstep(-0.18, 0.30, intensity);
     vec4 day   = texture2D(dayMap, vUv);
@@ -152,16 +225,21 @@ const EARTH_FRAG = /* glsl */`
 // Animated Sun and atmosphere shaders
 // ---------------------------------------------------------------------------
 const SUN_VERT = /* glsl */`
+  #include <common>
+  #include <logdepthbuf_pars_vertex>
   varying vec2 vUv;
   varying vec3 vNormal;
   void main() {
     vUv = uv;
     vNormal = normalize(normalMatrix * normal);
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    #include <logdepthbuf_vertex>
   }
 `;
 
 const SUN_FRAG = /* glsl */`
+  #include <common>
+  #include <logdepthbuf_pars_fragment>
   uniform sampler2D sunMap;
   uniform float time;
   varying vec2 vUv;
@@ -183,6 +261,7 @@ const SUN_FRAG = /* glsl */`
   }
 
   void main() {
+    #include <logdepthbuf_fragment>
     vec2 flowUv = vec2(vUv.x + time * 0.012, vUv.y);
     vec3 tex = texture2D(sunMap, flowUv).rgb;
     float granules = noise(vUv * 46.0 + time * 0.45);
@@ -196,6 +275,8 @@ const SUN_FRAG = /* glsl */`
 `;
 
 const ATMOS_VERT = /* glsl */`
+  #include <common>
+  #include <logdepthbuf_pars_vertex>
   varying vec3 vNormal;
   varying vec3 vViewDir;
   void main() {
@@ -203,17 +284,26 @@ const ATMOS_VERT = /* glsl */`
     vNormal = normalize(normalMatrix * normal);
     vViewDir = normalize(-mvPosition.xyz);
     gl_Position = projectionMatrix * mvPosition;
+    #include <logdepthbuf_vertex>
   }
 `;
 
+// BackSide shell: visible fragments are on the FAR hemisphere, whose outward
+// normals point away from the camera — dot(n, v) is in [-1, 0]. The rim is
+// where the dot approaches 0, so the falloff must use -dot (the old
+// max(dot, 0) clamped to 0 everywhere, producing a flat hard-edged glow).
 const ATMOS_FRAG = /* glsl */`
+  #include <common>
+  #include <logdepthbuf_pars_fragment>
   uniform vec3 glowColor;
   uniform float intensity;
   varying vec3 vNormal;
   varying vec3 vViewDir;
   void main() {
-    float fresnel = pow(1.0 - max(dot(normalize(vNormal), normalize(vViewDir)), 0.0), 2.6);
-    float alpha = smoothstep(0.0, 1.0, fresnel) * intensity;
+    #include <logdepthbuf_fragment>
+    float facing = clamp(-dot(normalize(vNormal), normalize(vViewDir)), 0.0, 1.0);
+    float rim = pow(1.0 - facing, 3.2);
+    float alpha = smoothstep(0.0, 1.0, rim) * intensity;
     gl_FragColor = vec4(glowColor, alpha);
   }
 `;
@@ -258,6 +348,7 @@ export class CelestialBody {
 
     if (state.id === 'earth') this._buildEarthCloudLayer();
     if (state.hasRings)      this._buildRings(textureLoader);
+    if (RING_SPECS[state.id]) this._buildProceduralRings(RING_SPECS[state.id]!);
     if (state.hasAtmosphere) this._buildAtmosphere();
 
     // Apply axial tilt to the inner group (tilts mesh + rings + atmosphere together)
@@ -342,7 +433,15 @@ export class CelestialBody {
         tl.load(this.state.texturePath, tex => {
           tex.colorSpace = THREE.SRGBColorSpace;
           tex.anisotropy = 8;
-          (mat as THREE.MeshStandardMaterial).map = tex;
+          const std = mat as THREE.MeshStandardMaterial;
+          std.map = tex;
+          // Bump-from-luminance for cratered/rocky bodies: reuses the diffuse
+          // texture as a bump map so craters and ridges catch raking light
+          // along the terminator. Cheap stand-in until real normal maps.
+          if (['mercury', 'moon', 'mars', 'pluto', 'io', 'europa', 'ganymede', 'callisto'].includes(this.state.id)) {
+            std.bumpMap = tex;
+            std.bumpScale = 0.02;
+          }
           mat.needsUpdate = true;
         });
       }
@@ -376,6 +475,25 @@ export class CelestialBody {
     const ringMesh = new THREE.Mesh(geo, mat);
     ringMesh.rotation.x = Math.PI / 2;
     ringMesh.receiveShadow = true;
+    this.tiltGroup.add(ringMesh);
+  }
+
+  private _buildProceduralRings(spec: RingSpec): void {
+    const innerR = this.visualRadius * spec.innerR;
+    const outerR = this.visualRadius * spec.outerR;
+    const geo = new THREE.RingGeometry(innerR, outerR, 128, 1);
+    fixRingUVs(geo, innerR, outerR);
+
+    const mat = new THREE.MeshBasicMaterial({
+      map: makeRingStripTexture(spec),
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: spec.opacity,
+      depthWrite: false,
+    });
+
+    const ringMesh = new THREE.Mesh(geo, mat);
+    ringMesh.rotation.x = Math.PI / 2;
     this.tiltGroup.add(ringMesh);
   }
 

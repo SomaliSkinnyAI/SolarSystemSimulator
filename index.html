@@ -597,6 +597,38 @@
           max-height: calc(100vh - 292px);
         }
       }
+
+      /* Photo mode (P) — hide every overlay, leave pure rendered space */
+      body.photo-mode #ui-root,
+      body.photo-mode #label-container,
+      body.photo-mode #hud,
+      body.photo-mode #scale-legend,
+      body.photo-mode #event-panel,
+      body.photo-mode #date-overlay,
+      body.photo-mode #planet-card,
+      body.photo-mode #spawn-panel,
+      body.photo-mode #god-mode-hint,
+      body.photo-mode #crosshair {
+        display: none !important;
+      }
+      #photo-mode-hint {
+        position: fixed;
+        bottom: 14px;
+        left: 50%;
+        transform: translateX(-50%);
+        padding: 6px 14px;
+        border-radius: 999px;
+        background: rgba(10, 12, 25, 0.72);
+        border: 1px solid rgba(120, 140, 200, 0.25);
+        color: #aab4d4;
+        font-family: 'Courier New', monospace;
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        z-index: 400;
+        display: none;
+        pointer-events: none;
+      }
+      body.photo-mode #photo-mode-hint { display: block; }
     </style>
   </head>
   <body>
@@ -706,6 +738,7 @@
     </div>
 
     <div id="god-mode-hint">GOD MODE — Click in the scene to place a body</div>
+    <div id="photo-mode-hint">PHOTO MODE — P exit · S save 2× capture</div>
     <div id="planet-card">
       <div class="card-accent"></div>
       <div class="card-header"></div>

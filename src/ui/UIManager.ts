@@ -313,6 +313,13 @@ export class UIManager {
       label: 'Bloom Strength', min: 0, max: 3, step: 0.05,
     }).on('change', () => this.sceneManager.applyRenderConfig(this.renderConfig));
 
+    page.addBinding(this.renderConfig, 'exposure', {
+      label: 'Exposure', min: 0.3, max: 2.5, step: 0.02,
+    }).on('change', () => this.sceneManager.applyRenderConfig(this.renderConfig));
+
+    page.addBinding(this.renderConfig, 'showLensflare', { label: 'Lens Flare' })
+      .on('change', () => this.sceneManager.applyRenderConfig(this.renderConfig));
+
     page.addBinding(this.renderConfig, 'showAsteroidBelt', { label: 'Asteroid Belt' })
       .on('change', () => this.sceneManager.applyRenderConfig(this.renderConfig));
 
@@ -338,6 +345,8 @@ export class UIManager {
       link.download = 'solar-system.png';
       link.click();
     });
+
+    page.addButton({ title: '🎞 Photo Mode (P)' }).on('click', () => this.togglePhotoMode());
   }
 
   // ---------------------------------------------------------------------------
@@ -402,6 +411,14 @@ export class UIManager {
           break;
         case 'l': case 'L':
           this.renderConfig.logScale = !this.renderConfig.logScale;
+          break;
+        case 'p': case 'P':
+          this.togglePhotoMode();
+          break;
+        case 's': case 'S':
+          if (document.body.classList.contains('photo-mode')) {
+            this._savePhotoCapture();
+          }
           break;
         case 'Escape':
           this.bodySelector.deselectBody();
@@ -583,6 +600,20 @@ export class UIManager {
     ).join('');
 
     this.planetCard.classList.add('visible');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Photo mode — hides every overlay; S saves a 2× supersampled capture
+  // ---------------------------------------------------------------------------
+  togglePhotoMode(): void {
+    document.body.classList.toggle('photo-mode');
+  }
+
+  private _savePhotoCapture(): void {
+    const link = document.createElement('a');
+    link.href     = this.sceneManager.captureScreenshot(2);
+    link.download = 'solar-system-photo.png';
+    link.click();
   }
 
   /** Sync the Real-Time checkbox state (e.g. after a date jump) */

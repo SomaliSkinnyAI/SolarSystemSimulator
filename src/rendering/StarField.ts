@@ -77,6 +77,8 @@ export class StarField {
     const mat = new THREE.ShaderMaterial({
       uniforms: { opacity: { value: 1.0 } },
       vertexShader: /* glsl */`
+        #include <common>
+        #include <logdepthbuf_pars_vertex>
         attribute float size;
         attribute vec3 color;
         varying vec3 vColor;
@@ -85,12 +87,16 @@ export class StarField {
           vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
           gl_PointSize = size;
           gl_Position = projectionMatrix * mvPosition;
+          #include <logdepthbuf_vertex>
         }
       `,
       fragmentShader: /* glsl */`
+        #include <common>
+        #include <logdepthbuf_pars_fragment>
         uniform float opacity;
         varying vec3 vColor;
         void main() {
+          #include <logdepthbuf_fragment>
           // Circular point with a soft stellar core.
           vec2 uv = gl_PointCoord - vec2(0.5);
           float r = length(uv);

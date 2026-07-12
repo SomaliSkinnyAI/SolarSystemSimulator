@@ -53,6 +53,8 @@ export interface RenderConfig {
   trailLength: number;       // max trail points per body
   showBloom: boolean;
   bloomStrength: number;
+  exposure: number;          // tone-mapping exposure
+  showLensflare: boolean;
   showAsteroidBelt: boolean;
   showSolarWind: boolean;
   showLagrangePoints: boolean;

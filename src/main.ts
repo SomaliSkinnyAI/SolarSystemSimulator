@@ -38,6 +38,8 @@ const renderConfig: RenderConfig = {
   trailLength: 500,
   showBloom: true,
   bloomStrength: 0.5,
+  exposure: 1.08,
+  showLensflare: true,
   showAsteroidBelt: true,
   showSolarWind: false,
   showLagrangePoints: false,

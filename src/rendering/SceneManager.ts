@@ -4,6 +4,8 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
+import { Lensflare, LensflareElement } from 'three/examples/jsm/objects/Lensflare.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 
 import { CelestialBody } from '../physics/CelestialBody';
@@ -19,6 +21,8 @@ const SW_COUNT = 2500;
 const SW_MAX_DIST = 60; // scene units from Sun
 
 const SOLAR_WIND_VERT = /* glsl */`
+  #include <common>
+  #include <logdepthbuf_pars_vertex>
   attribute float age;
   attribute float maxAge;
   uniform float time;
@@ -27,17 +31,117 @@ const SOLAR_WIND_VERT = /* glsl */`
     vAlpha = clamp(1.0 - age / maxAge, 0.0, 1.0) * 0.5;
     gl_PointSize = 2.0;
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    #include <logdepthbuf_vertex>
   }
 `;
 const SOLAR_WIND_FRAG = /* glsl */`
+  #include <common>
+  #include <logdepthbuf_pars_fragment>
   varying float vAlpha;
   void main() {
+    #include <logdepthbuf_fragment>
     vec2 uv = gl_PointCoord - 0.5;
     float r = length(uv);
     if (r > 0.5) discard;
     gl_FragColor = vec4(1.0, 0.75, 0.35, vAlpha * (1.0 - r * 2.0));
   }
 `;
+
+// ---------------------------------------------------------------------------
+// Final dither pass — ±0.5/255 triangular noise on the 8-bit output breaks
+// the banding visible in smooth gradients (atmospheres, bloom halos).
+// ---------------------------------------------------------------------------
+const DitherShader = {
+  uniforms: { tDiffuse: { value: null } },
+  vertexShader: /* glsl */`
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: /* glsl */`
+    uniform sampler2D tDiffuse;
+    varying vec2 vUv;
+    float rand(vec2 co) {
+      return fract(sin(dot(co, vec2(12.9898, 78.233))) * 43758.5453);
+    }
+    void main() {
+      vec4 color = texture2D(tDiffuse, vUv);
+      // Triangular-distribution dither: sum of two uniforms − 1
+      float noise = (rand(gl_FragCoord.xy) + rand(gl_FragCoord.yx + 17.0)) * 0.5 - 0.5;
+      gl_FragColor = vec4(color.rgb + noise / 255.0, color.a);
+    }
+  `,
+};
+
+// ---------------------------------------------------------------------------
+// Procedural lens-flare element textures (no image assets needed)
+// ---------------------------------------------------------------------------
+function makeFlareGlowTexture(): THREE.CanvasTexture {
+  const size = 256;
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const ctx = c.getContext('2d')!;
+  const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  g.addColorStop(0.0, 'rgba(255,245,224,1.0)');
+  g.addColorStop(0.25, 'rgba(255,235,200,0.55)');
+  g.addColorStop(0.6, 'rgba(255,220,170,0.12)');
+  g.addColorStop(1.0, 'rgba(255,210,150,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, size, size);
+  return new THREE.CanvasTexture(c);
+}
+
+function makeFlareStarburstTexture(): THREE.CanvasTexture {
+  const size = 512;
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const ctx = c.getContext('2d')!;
+  const cx = size / 2;
+  ctx.translate(cx, cx);
+  // 6 diffraction spikes
+  for (let i = 0; i < 6; i++) {
+    const g = ctx.createLinearGradient(0, -cx, 0, cx);
+    g.addColorStop(0.0, 'rgba(255,245,230,0)');
+    g.addColorStop(0.5, 'rgba(255,245,230,0.85)');
+    g.addColorStop(1.0, 'rgba(255,245,230,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(-1.1, -cx, 2.2, size);
+    ctx.rotate(Math.PI / 3);
+  }
+  // Soft core
+  const core = ctx.createRadialGradient(0, 0, 0, 0, 0, 40);
+  core.addColorStop(0, 'rgba(255,250,240,0.9)');
+  core.addColorStop(1, 'rgba(255,250,240,0)');
+  ctx.fillStyle = core;
+  ctx.fillRect(-cx, -cx, size, size);
+  return new THREE.CanvasTexture(c);
+}
+
+function makeFlareGhostTexture(): THREE.CanvasTexture {
+  const size = 128;
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const ctx = c.getContext('2d')!;
+  const cx = size / 2;
+  // Chromatic-fringed ring: offset RGB circles
+  const rings: Array<[string, number]> = [
+    ['rgba(255,80,80,0.25)', -1.5],
+    ['rgba(90,255,120,0.25)', 0],
+    ['rgba(90,140,255,0.25)', 1.5],
+  ];
+  for (const [color, off] of rings) {
+    const g = ctx.createRadialGradient(cx + off, cx, cx * 0.45, cx + off, cx, cx * 0.9);
+    g.addColorStop(0.0, 'rgba(0,0,0,0)');
+    g.addColorStop(0.55, color);
+    g.addColorStop(0.75, color.replace('0.25', '0.08'));
+    g.addColorStop(1.0, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, size, size);
+  }
+  return new THREE.CanvasTexture(c);
+}
 
 // ---------------------------------------------------------------------------
 // Lagrange point sprite helper
@@ -68,6 +172,7 @@ export class SceneManager {
   private starField: StarField;
   private sunLight: THREE.PointLight;
   private ambientLight: THREE.AmbientLight;
+  private lensflare!: Lensflare;
 
   // CSS2D label renderer
   private labelRenderer: CSS2DRenderer;
@@ -114,8 +219,14 @@ export class SceneManager {
   private scaleLerpT = 0;
 
   constructor(renderConfig: RenderConfig, cameraConfig: CameraConfig) {
-    // Renderer
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    // Renderer. logarithmicDepthBuffer: the camera spans near=0.001 to
+    // far=1e8 — a standard depth buffer loses all precision past a few
+    // units, z-fighting orbit rings against body surfaces.
+    this.renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      powerPreference: 'high-performance',
+      logarithmicDepthBuffer: true,
+    });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -154,6 +265,18 @@ export class SceneManager {
     this.sunLight.shadow.bias = -0.00005;
     this.scene.add(this.sunLight);
 
+    // Lens flare — procedural textures, occlusion-tested by Lensflare itself
+    // (fades when a planet or the screen edge covers the Sun).
+    this.lensflare = new Lensflare();
+    const flareTint = new THREE.Color(0xFFF5E0);
+    this.lensflare.addElement(new LensflareElement(makeFlareGlowTexture(), 340, 0, flareTint));
+    this.lensflare.addElement(new LensflareElement(makeFlareStarburstTexture(), 500, 0, flareTint));
+    const ghostTex = makeFlareGhostTexture();
+    for (const [size, dist] of [[58, 0.32], [90, 0.5], [70, 0.68], [130, 0.9], [110, 1.2]] as const) {
+      this.lensflare.addElement(new LensflareElement(ghostTex, size, dist));
+    }
+    this.sunLight.add(this.lensflare);
+
     this.ambientLight = new THREE.AmbientLight(0x182033, 0.13);
     this.scene.add(this.ambientLight);
 
@@ -161,8 +284,14 @@ export class SceneManager {
     this.starField = new StarField();
     this.starField.addToScene(this.scene);
 
-    // Post-processing
-    this.composer = new EffectComposer(this.renderer);
+    // Post-processing. The default EffectComposer target is non-multisampled,
+    // which silently discards the canvas's antialias flag — pass an explicit
+    // MSAA half-float target so edges stay smooth and bloom works in HDR.
+    const dpr = this.renderer.getPixelRatio();
+    this.composer = new EffectComposer(this.renderer, new THREE.WebGLRenderTarget(
+      window.innerWidth * dpr, window.innerHeight * dpr,
+      { samples: 4, type: THREE.HalfFloatType }
+    ));
     this.composer.addPass(new RenderPass(this.scene, this.camera));
     this.bloomPass = new UnrealBloomPass(
       new THREE.Vector2(window.innerWidth, window.innerHeight),
@@ -172,6 +301,7 @@ export class SceneManager {
     );
     this.composer.addPass(this.bloomPass);
     this.composer.addPass(new OutputPass());
+    this.composer.addPass(new ShaderPass(DitherShader));
 
     // CSS2D label renderer (overlays on top of WebGL canvas)
     this.labelRenderer = new CSS2DRenderer();
@@ -528,6 +658,8 @@ export class SceneManager {
   applyRenderConfig(cfg: RenderConfig): void {
     this.bloomPass.enabled    = cfg.showBloom;
     this.bloomPass.strength   = cfg.bloomStrength;
+    this.renderer.toneMappingExposure = cfg.exposure;
+    this.lensflare.visible = cfg.showLensflare;
     if (this.asteroidMesh) this.asteroidMesh.visible = cfg.showAsteroidBelt;
     if (this.swMesh)        this.swMesh.visible       = cfg.showSolarWind;
     if (this.gravFieldMesh) this.gravFieldMesh.visible = cfg.showGravityField;
@@ -543,10 +675,33 @@ export class SceneManager {
     const w = window.innerWidth, h = window.innerHeight;
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+    // Re-apply pixel ratio: browser zoom or dragging to a different-DPR
+    // monitor changes devicePixelRatio after construction.
+    const dpr = Math.min(window.devicePixelRatio, 2);
+    this.renderer.setPixelRatio(dpr);
+    this.composer.setPixelRatio(dpr);
     this.renderer.setSize(w, h);
     this.composer.setSize(w, h);
     this.bloomPass.resolution.set(w, h);
     this.labelRenderer.setSize(w, h);
+  }
+
+  /**
+   * Photo-mode capture: renders at `scale`× resolution and returns a PNG
+   * data URL, then restores the normal viewport.
+   */
+  captureScreenshot(scale = 2): string {
+    const w = window.innerWidth, h = window.innerHeight;
+    this.renderer.setSize(w * scale, h * scale, false);
+    this.composer.setSize(w * scale, h * scale);
+    this.bloomPass.resolution.set(w * scale, h * scale);
+    this.composer.render();
+    const url = this.renderer.domElement.toDataURL('image/png');
+    this.renderer.setSize(w, h);
+    this.composer.setSize(w, h);
+    this.bloomPass.resolution.set(w, h);
+    this.composer.render();
+    return url;
   }
 
   // ---------------------------------------------------------------------------
