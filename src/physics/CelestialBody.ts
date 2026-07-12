@@ -5,6 +5,7 @@ import { Trail } from '../rendering/TrailRenderer';
 import { buildScatteringAtmosphere, AtmosphereHandle, ATMOSPHERE_PARAMS } from '../rendering/AtmosphereShader';
 import { assetUrl } from '../utils/assetUrl';
 import { buildAurora, AuroraHandle } from '../rendering/Aurora';
+import { buildSpacecraftModel } from '../rendering/SpacecraftModels';
 import { buildLitRingMaterial, RingMaterialHandle, RING_SHADOW_GLSL, makeRingShadowUniforms, RingShadowUniforms } from '../rendering/RingShader';
 import { patchStandardMaterialForEclipse, makeEclipseUniforms, EclipseUniforms, ECLIPSE_GLSL } from '../rendering/EclipseShadows';
 
@@ -472,21 +473,20 @@ export class CelestialBody {
   // ---------------------------------------------------------------------------
   private _buildMesh(tl: THREE.TextureLoader): THREE.Mesh {
     if (this.state.isSpacecraft) {
-      // Spacecraft: small glinting octahedron + point glow, no textures
-      const geo = new THREE.OctahedronGeometry(this.visualRadius, 0);
-      const mat = new THREE.MeshStandardMaterial({
-        color: this.state.color,
-        emissive: new THREE.Color(this.state.color),
-        emissiveIntensity: 0.55,
-        roughness: 0.35,
-        metalness: 0.8,
-      });
-      const mesh = new THREE.Mesh(geo, mat);
+      // Invisible sphere = generous raycast/click target; the visible
+      // craft is a recognizable primitive-built model parented to it.
+      const hitMesh = new THREE.Mesh(
+        new THREE.SphereGeometry(this.visualRadius * 2.2, 8, 6),
+        new THREE.MeshBasicMaterial({ visible: false })
+      );
+      hitMesh.add(buildSpacecraftModel(this.state.id, this.visualRadius));
+
+      // Faint locator glow so the craft is findable when sub-pixel
       const glowCanvas = document.createElement('canvas');
       glowCanvas.width = glowCanvas.height = 32;
       const ctx = glowCanvas.getContext('2d')!;
       const g = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
-      g.addColorStop(0, 'rgba(255,255,255,0.9)');
+      g.addColorStop(0, 'rgba(255,255,255,0.8)');
       g.addColorStop(1, 'rgba(255,255,255,0)');
       ctx.fillStyle = g;
       ctx.fillRect(0, 0, 32, 32);
@@ -495,11 +495,11 @@ export class CelestialBody {
         color: this.state.color,
         transparent: true,
         depthWrite: false,
-        opacity: 0.8,
+        opacity: 0.45,
       }));
-      sprite.scale.setScalar(this.visualRadius * 3.5);
-      mesh.add(sprite);
-      return mesh;
+      sprite.scale.setScalar(this.visualRadius * 1.6);
+      hitMesh.add(sprite);
+      return hitMesh;
     }
 
     const geo = new THREE.SphereGeometry(this.visualRadius, 64, 32);

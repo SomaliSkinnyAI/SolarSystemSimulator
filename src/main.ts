@@ -928,6 +928,29 @@ function animate(): void {
     }
   }
 
+  // --- Spacecraft visual clearance (exaggerated modes only) ---
+  // In educational scale the inflated Sun/planet spheres can swallow nearby
+  // craft (JWST sits 0.01 AU from Earth — inside its 2.5-unit display
+  // sphere; Parker's perihelion is inside the 8-unit display Sun). Push
+  // them just outside the surface along the true direction, like moons.
+  if (!renderConfig.realScale) {
+    for (const craft of bodies) {
+      if (!craft.state.isSpacecraft || !craft.group.visible) continue;
+      for (const anchor of bodies) {
+        if (anchor === craft || anchor.state.isMoon || anchor.state.isSpacecraft) continue;
+        const anchorR = anchor.visualRadius * anchor.group.scale.x;
+        const clearR = anchorR * 1.3;
+        const d = craft.group.position.distanceTo(anchor.group.position);
+        if (d > 1e-9 && d < clearR) {
+          craft.group.position
+            .sub(anchor.group.position)
+            .multiplyScalar(clearR / d)
+            .add(anchor.group.position);
+        }
+      }
+    }
+  }
+
   // --- Update planet labels ---
   sceneManager.updateLabels(bodies);
 
@@ -1048,3 +1071,10 @@ function animate(): void {
 }
 
 animate();
+
+// Dev/debug handle (harmless in production; enables console inspection)
+(window as unknown as Record<string, unknown>)['__sim'] = {
+  scene,
+  camera: sceneManager.camera,
+  bodies: () => bodies,
+};
