@@ -39,6 +39,11 @@ export class UIManager {
   onMuteToggle?: () => void;
   /** Fired when the user changes physics itself (G, relativity, sliders). */
   onPhysicsMutated?: () => void;
+  onPlanMission?: (targetId: string) => void;
+
+  private missionBtn!: HTMLButtonElement;
+  private static readonly MISSION_TARGETS =
+    ['mercury', 'venus', 'mars', 'jupiter', 'saturn', 'uranus', 'neptune', 'pluto'];
 
   // Discovery-mode fact rotation state
   private factEl!: HTMLElement;
@@ -121,6 +126,21 @@ export class UIManager {
     this.factEl.className = 'card-fact';
     this.factEl.style.display = 'none';
     this.planetCard.appendChild(this.factEl);
+
+    // Mission-planner entry point (planets only)
+    this.missionBtn = document.createElement('button');
+    this.missionBtn.textContent = '🚀 Plan mission from Earth';
+    Object.assign(this.missionBtn.style, {
+      display: 'none', marginTop: '8px', width: '100%',
+      background: 'rgba(60, 75, 125, 0.5)', color: '#dde4f5', border: 'none',
+      borderRadius: '6px', fontFamily: 'inherit', fontSize: '11px',
+      padding: '5px 10px', cursor: 'pointer',
+    });
+    this.missionBtn.addEventListener('click', () => {
+      const sel = this.bodySelector.selectedBody;
+      if (sel) this.onPlanMission?.(sel.state.id);
+    });
+    this.planetCard.appendChild(this.missionBtn);
 
     this._buildTabs();
     this._buildKeyboard();
@@ -672,6 +692,9 @@ export class UIManager {
     } else {
       this.factEl.style.display = 'none';
     }
+
+    this.missionBtn.style.display =
+      UIManager.MISSION_TARGETS.includes(s.id) ? 'block' : 'none';
 
     this.planetCard.classList.add('visible');
   }

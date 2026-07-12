@@ -254,6 +254,21 @@ function placeMoon(
   );
 }
 
+/**
+ * Fast synchronous heliocentric state (SI, sim axes) for a planet at an
+ * arbitrary Julian date — the mission planner's ephemeris (thousands of
+ * evaluations per porkchop plot; the Horizons cache would be overkill).
+ */
+export function heliocentricStateAtJD(
+  id: string,
+  jd: number
+): { position: THREE.Vector3; velocity: THREE.Vector3 } | null {
+  const el = id === 'pluto' ? PLUTO_ELEMENTS : ELEMENTS[id];
+  if (!el) return null;
+  const T = (jd - 2451545.0) / 36525.0;
+  return computeHeliocentricState(el, T);
+}
+
 export function computeBodiesForDate(date: Date): BodyState[] {
   const T = centuriesSinceJ2000(date);
   const bodies: BodyState[] = [];

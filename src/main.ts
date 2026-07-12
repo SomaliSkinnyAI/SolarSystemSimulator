@@ -18,6 +18,7 @@ import { TourController } from './ui/TourController';
 import { CommandPalette, PaletteItem } from './ui/CommandPalette';
 import { AudioManager } from './audio/AudioManager';
 import { UpcomingEvent } from './utils/EventPredictor';
+import { MissionPanel, MissionChoice } from './ui/MissionPanel';
 import { PhysicsEngine } from './physics/PhysicsEngine';
 import { SceneManager } from './rendering/SceneManager';
 import { TrailRenderer } from './rendering/TrailRenderer';
@@ -596,6 +597,42 @@ function spawnAtLagrange(secondary: CelestialBody, sign: 1 | -1): void {
   });
 }
 
+// --- Mission planner: porkchop plot + genuine N-body launch ---
+const missionPanel = new MissionPanel();
+ui.onPlanMission = (targetId) => missionPanel.open(targetId, simDate);
+missionPanel.onLaunch = (choice: MissionChoice) => {
+  void (async () => {
+    await applyDateInPlace(choice.departure);
+    simConfig.paused = false;
+    simConfig.timeScale = 2_592_000; // ~1 month per second: watch the cruise
+    renderConfig.showTrails = true;  // the probe draws its own trajectory
+
+    const earthBody = bodies.find(b => b.state.id === 'earth');
+    const targetBody = bodies.find(b => b.state.id === choice.targetId);
+    if (!earthBody) return;
+    // Spawn just outside Earth along the outbound asymptote so the probe
+    // doesn't start inside the planet
+    const outbound = choice.injectionVelocity.clone()
+      .sub(earthBody.state.velocity).normalize();
+    spawnPanel.onSpawn?.({
+      name: `Probe → ${targetBody?.state.name ?? choice.targetId}`,
+      mass: 1200,
+      radius: 200,
+      position: earthBody.state.position.clone().addScaledVector(outbound, 2.5e8),
+      velocity: choice.injectionVelocity.clone(),
+      color: 0x9adcff,
+      isEmissive: false,
+    });
+    const probe = bodies[bodies.length - 1];
+    if (probe) {
+      bodySelector.selectBody(probe);
+      cameraConfig.focusMode = true;
+      cameraConfig.focusBodyId = probe.state.id;
+      sceneManager.focusOn(probe);
+    }
+  })();
+};
+
 const palette = new CommandPalette();
 palette.getItems = (): PaletteItem[] => [
   ...bodies.map(b => ({
@@ -623,6 +660,7 @@ palette.getItems = (): PaletteItem[] => [
     return [
       { label: `Drop Trojan at Sun–${sel.state.name} L4`, kind: 'action', run: () => spawnAtLagrange(sel, 1) },
       { label: `Drop Trojan at Sun–${sel.state.name} L5`, kind: 'action', run: () => spawnAtLagrange(sel, -1) },
+      { label: `Plan mission to ${sel.state.name}`, kind: 'action', run: () => missionPanel.open(sel.state.id, simDate) },
     ];
   })(),
 ];
