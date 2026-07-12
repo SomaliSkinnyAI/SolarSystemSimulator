@@ -55,6 +55,7 @@ export interface RenderConfig {
   bloomStrength: number;
   exposure: number;          // tone-mapping exposure
   showLensflare: boolean;
+  showGodRays: boolean;
   showAsteroidBelt: boolean;
   showSolarWind: boolean;
   showLagrangePoints: boolean;

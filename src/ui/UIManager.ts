@@ -334,6 +334,9 @@ export class UIManager {
     page.addBinding(this.renderConfig, 'showLensflare', { label: 'Lens Flare' })
       .on('change', () => this.sceneManager.applyRenderConfig(this.renderConfig));
 
+    page.addBinding(this.renderConfig, 'showGodRays', { label: 'God Rays' })
+      .on('change', () => this.sceneManager.applyRenderConfig(this.renderConfig));
+
     page.addBinding(this.renderConfig, 'showAsteroidBelt', { label: 'Asteroid Belt' })
       .on('change', () => this.sceneManager.applyRenderConfig(this.renderConfig));
 

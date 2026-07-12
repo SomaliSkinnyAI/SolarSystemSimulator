@@ -3,6 +3,8 @@ import { BodyState } from '../types';
 import { physicsToScene, visualRadius, DISPLAY_SCALE } from '../utils/CoordinateSystem';
 import { Trail } from '../rendering/TrailRenderer';
 import { buildScatteringAtmosphere, AtmosphereHandle, ATMOSPHERE_PARAMS } from '../rendering/AtmosphereShader';
+import { assetUrl } from '../utils/assetUrl';
+import { buildAurora, AuroraHandle } from '../rendering/Aurora';
 import { buildLitRingMaterial, RingMaterialHandle, RING_SHADOW_GLSL, makeRingShadowUniforms, RingShadowUniforms } from '../rendering/RingShader';
 import { patchStandardMaterialForEclipse, makeEclipseUniforms, EclipseUniforms, ECLIPSE_GLSL } from '../rendering/EclipseShadows';
 
@@ -418,6 +420,7 @@ export class CelestialBody {
   eclipseUniforms: EclipseUniforms | null = null;
   private earthCloudTexture: THREE.Texture | null = null;
   private earthCloudShift: { value: number } | null = null;
+  private aurora: AuroraHandle | null = null;
 
   // Keep a scene ref for later removal
   private scene: THREE.Scene;
@@ -441,7 +444,11 @@ export class CelestialBody {
     this.mesh = this._buildMesh(textureLoader);
     this.tiltGroup.add(this.mesh);
 
-    if (state.id === 'earth') this._buildEarthCloudLayer();
+    if (state.id === 'earth') {
+      this._buildEarthCloudLayer();
+      this.aurora = buildAurora(this.visualRadius);
+      this.tiltGroup.add(this.aurora.group);
+    }
     if (state.hasRings)      this._buildRings(textureLoader);
     if (RING_SPECS[state.id]) this._buildProceduralRings(RING_SPECS[state.id]!);
     if (state.hasAtmosphere) this._buildAtmosphere();
@@ -497,12 +504,12 @@ export class CelestialBody {
         fragmentShader: EARTH_FRAG.replace('ECLIPSE_CHUNK', ECLIPSE_GLSL),
       });
       if (this.state.texturePath) {
-        tl.load(this.state.texturePath, tex => {
+        tl.load(assetUrl(this.state.texturePath), tex => {
           tex.colorSpace = THREE.SRGBColorSpace;
           uniforms.dayMap.value = tex; mat.needsUpdate = true;
         });
       }
-      tl.load(this.state.nightTexturePath, tex => {
+      tl.load(assetUrl(this.state.nightTexturePath), tex => {
         tex.colorSpace = THREE.SRGBColorSpace;
         uniforms.nightMap.value = tex; mat.needsUpdate = true;
       });
@@ -535,7 +542,7 @@ export class CelestialBody {
       }
 
       if (this.state.texturePath) {
-        tl.load(this.state.texturePath, tex => {
+        tl.load(assetUrl(this.state.texturePath), tex => {
           tex.colorSpace = THREE.SRGBColorSpace;
           tex.anisotropy = 8;
           const std = mat as THREE.MeshStandardMaterial;
@@ -569,7 +576,7 @@ export class CelestialBody {
     this.ringHandle = buildLitRingMaterial(0.9);
     const mat = this.ringHandle.material;
 
-    tl.load('/textures/saturn_rings.png', tex => {
+    tl.load(assetUrl('/textures/saturn_rings.png'), tex => {
       tex.colorSpace = THREE.SRGBColorSpace;
       mat.uniforms['map']!.value = tex;
       mat.needsUpdate = true;
@@ -735,6 +742,10 @@ export class CelestialBody {
     if (this.ringShadowUniforms) {
       this.ringShadowUniforms.uRsSunPos.value.copy(sunScenePos);
     }
+    if (this.aurora) {
+      this.aurora.uniforms.uSunPos.value.copy(sunScenePos);
+      this.aurora.uniforms.uPlanetCenter.value.copy(this.group.position);
+    }
   }
 
   private _setScenePosition(logScale: boolean, lerpT: number): void {
@@ -794,6 +805,9 @@ export class CelestialBody {
     if (this.coronaUniforms) {
       this.coronaUniforms.time.value += dtSeconds;
     }
+    if (this.aurora) {
+      this.aurora.uniforms.time.value += dtSeconds;
+    }
 
     if (this.state.rotationPeriod) {
       // Physics-based rotation: angular velocity = 2π / period, scaled by sim time
@@ -850,6 +864,7 @@ export class CelestialBody {
     if (this.atmosphereMesh) this.atmosphereMesh.visible = visible;
     if (this.scatterAtmo) this.scatterAtmo.mesh.visible = visible;
     if (this.cloudMesh) this.cloudMesh.visible = visible;
+    if (this.aurora) this.aurora.group.visible = visible;
   }
 
   // ---------------------------------------------------------------------------

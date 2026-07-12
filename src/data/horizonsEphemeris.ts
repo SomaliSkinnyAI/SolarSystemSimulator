@@ -24,7 +24,9 @@ export interface EphemerisResult {
   cacheRange: string;
 }
 
-const CACHE_URL = '/ephemeris/horizons-2024-2028.json';
+import { assetUrl } from '../utils/assetUrl';
+
+const CACHE_URL = assetUrl('/ephemeris/horizons-2024-2028.json');
 let cachePromise: Promise<HorizonsCache | null> | null = null;
 
 function loadCache(): Promise<HorizonsCache | null> {

@@ -49,6 +49,52 @@ const SOLAR_WIND_FRAG = /* glsl */`
 `;
 
 // ---------------------------------------------------------------------------
+// God rays — luminance-thresholded radial blur toward the Sun's screen
+// position, run in linear HDR space before OutputPass. Occlusion comes free:
+// the blur source is the Sun's VISIBLE pixels, so a planet crossing the disk
+// blocks its own shafts. Fades out as the Sun leaves the frame.
+// ---------------------------------------------------------------------------
+const GodRaysShader = {
+  uniforms: {
+    tDiffuse: { value: null },
+    uSunScreen: { value: new THREE.Vector2(0.5, 0.5) },
+    uIntensity: { value: 0 },
+  },
+  vertexShader: /* glsl */`
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: /* glsl */`
+    uniform sampler2D tDiffuse;
+    uniform vec2 uSunScreen;
+    uniform float uIntensity;
+    varying vec2 vUv;
+    void main() {
+      vec4 base = texture2D(tDiffuse, vUv);
+      if (uIntensity <= 0.001) {
+        gl_FragColor = base;
+        return;
+      }
+      vec2 delta = (uSunScreen - vUv) * (1.0 / 40.0) * 0.92;
+      vec2 uv = vUv;
+      vec3 rays = vec3(0.0);
+      float decay = 1.0;
+      for (int i = 0; i < 40; i++) {
+        uv += delta;
+        // Only HDR-bright pixels (the Sun disk / corona) feed the shafts
+        vec3 s = max(texture2D(tDiffuse, uv).rgb - vec3(1.0), 0.0);
+        rays += s * decay;
+        decay *= 0.955;
+      }
+      gl_FragColor = vec4(base.rgb + rays * (uIntensity / 40.0), base.a);
+    }
+  `,
+};
+
+// ---------------------------------------------------------------------------
 // Final dither pass — ±0.5/255 triangular noise on the 8-bit output breaks
 // the banding visible in smooth gradients (atmospheres, bloom halos).
 // ---------------------------------------------------------------------------
@@ -171,6 +217,9 @@ export class SceneManager {
 
   private composer: EffectComposer;
   private bloomPass: UnrealBloomPass;
+  private godraysPass!: ShaderPass;
+  private godraysEnabled = true;
+  private static readonly _sunProj = new THREE.Vector3();
   private starField: StarField;
   private sunLight: THREE.PointLight;
   private ambientLight: THREE.AmbientLight;
@@ -304,6 +353,8 @@ export class SceneManager {
       0.82   // threshold — only emissive Sun exceeds this
     );
     this.composer.addPass(this.bloomPass);
+    this.godraysPass = new ShaderPass(GodRaysShader);
+    this.composer.addPass(this.godraysPass);
     this.composer.addPass(new OutputPass());
     this.composer.addPass(new ShaderPass(DitherShader));
 
@@ -708,6 +759,27 @@ export class SceneManager {
   // ---------------------------------------------------------------------------
   syncSunLight(sunBody: CelestialBody | null): void {
     if (sunBody) this.sunLight.position.copy(sunBody.group.position);
+    this._updateGodRays(sunBody);
+  }
+
+  private _updateGodRays(sunBody: CelestialBody | null): void {
+    const u = this.godraysPass.uniforms as typeof GodRaysShader.uniforms;
+    if (!this.godraysEnabled || !sunBody) {
+      u.uIntensity.value = 0;
+      return;
+    }
+    const p = SceneManager._sunProj.copy(sunBody.group.position).project(this.camera);
+    if (p.z > 1) { // behind the camera
+      u.uIntensity.value = 0;
+      return;
+    }
+    u.uSunScreen.value.set((p.x + 1) / 2, (p.y + 1) / 2);
+    // Fade as the Sun approaches / leaves the frame edges
+    const edge = Math.min(
+      1 - Math.abs(p.x) * 0.55,
+      1 - Math.abs(p.y) * 0.55
+    );
+    u.uIntensity.value = Math.max(0, Math.min(1, edge)) * 0.85;
   }
 
   // ---------------------------------------------------------------------------
@@ -718,6 +790,7 @@ export class SceneManager {
     this.bloomPass.strength   = cfg.bloomStrength;
     this.renderer.toneMappingExposure = cfg.exposure;
     this.lensflare.visible = cfg.showLensflare;
+    this.godraysEnabled = cfg.showGodRays;
     // Belt geometry lives in linear scene coordinates — hide it in log mode
     // where the whole system compresses to ~2.5 units
     if (this.asteroidMesh) this.asteroidMesh.visible = cfg.showAsteroidBelt && !cfg.logScale;

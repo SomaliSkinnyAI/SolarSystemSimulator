@@ -49,6 +49,7 @@ const renderConfig: RenderConfig = {
   bloomStrength: 0.5,
   exposure: 1.08,
   showLensflare: true,
+  showGodRays: true,
   showAsteroidBelt: true,
   showSolarWind: false,
   showLagrangePoints: false,

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { randomOnSphere, randRange } from '../utils/MathUtils';
+import { assetUrl } from '../utils/assetUrl';
 
 // ---------------------------------------------------------------------------
 // Night sky:
@@ -285,7 +286,7 @@ export class StarField {
   private async _buildCatalogStars(): Promise<void> {
     let rows: number[][];
     try {
-      const res = await fetch('/data/stars.json');
+      const res = await fetch(assetUrl('/data/stars.json'));
       if (!res.ok) return;
       rows = await res.json() as number[][];
     } catch {
