@@ -7,6 +7,7 @@ import { computeBodiesForDate, formatSimDate } from './data/realTimeOrbits';
 import { computeBodiesFromHorizonsCache } from './data/horizonsEphemeris';
 import { scanSystemEvents } from './utils/EventPredictor';
 import { CelestialBody } from './physics/CelestialBody';
+import { selectOccluders, updateEclipseUniforms } from './rendering/EclipseShadows';
 import { PhysicsEngine } from './physics/PhysicsEngine';
 import { SceneManager } from './rendering/SceneManager';
 import { TrailRenderer } from './rendering/TrailRenderer';
@@ -380,6 +381,10 @@ let prevLogScale = renderConfig.logScale;
 let prevRealScale = renderConfig.realScale;
 let eventPanelTimer = 1;
 
+// Eclipse occluder selection cache (rebuilt every 30 frames)
+const occluderMap = new Map<string, CelestialBody[]>();
+let eclipseFrameCounter = 30;
+
 function animate(): void {
   requestAnimationFrame(animate);
 
@@ -422,6 +427,28 @@ function animate(): void {
     body.updateScenePosition(renderConfig.logScale, lerpT, renderConfig.realScale);
     body.setAtmosphereVisible(renderConfig.showAtmospheres);
     if (!simConfig.paused) body.rotateBody(wallDt, simConfig.timeScale);
+  }
+
+  // Sun-dependent shader uniforms (day/night terminator, atmospheres) need
+  // the Sun's post-update scene position
+  if (sun) {
+    for (const body of bodies) body.updateSunPosition(sun.group.position);
+
+    // Eclipse shadows: re-select which bodies can shadow which every 30
+    // frames (cheap n² scan), refresh positions of the selected set per frame
+    eclipseFrameCounter++;
+    if (eclipseFrameCounter >= 30 || occluderMap.size === 0) {
+      eclipseFrameCounter = 0;
+      occluderMap.clear();
+      for (const body of bodies) {
+        if (!body.eclipseUniforms) continue;
+        occluderMap.set(body.state.id, selectOccluders(body, sun, bodies));
+      }
+    }
+    for (const body of bodies) {
+      if (!body.eclipseUniforms) continue;
+      updateEclipseUniforms(body.eclipseUniforms, sun, occluderMap.get(body.state.id) ?? []);
+    }
   }
 
   // --- Moon positioning (second pass — needs parent already updated) ---

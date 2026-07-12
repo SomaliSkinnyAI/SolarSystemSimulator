@@ -2,6 +2,9 @@ import * as THREE from 'three';
 import { BodyState } from '../types';
 import { physicsToScene, visualRadius, DISPLAY_SCALE } from '../utils/CoordinateSystem';
 import { Trail } from '../rendering/TrailRenderer';
+import { buildScatteringAtmosphere, AtmosphereHandle, ATMOSPHERE_PARAMS } from '../rendering/AtmosphereShader';
+import { buildLitRingMaterial, RingMaterialHandle, RING_SHADOW_GLSL, makeRingShadowUniforms, RingShadowUniforms } from '../rendering/RingShader';
+import { patchStandardMaterialForEclipse, makeEclipseUniforms, EclipseUniforms, ECLIPSE_GLSL } from '../rendering/EclipseShadows';
 
 // ---------------------------------------------------------------------------
 // Saturn ring UV fix — RingGeometry UVs don't map concentrically by default
@@ -19,24 +22,6 @@ function fixRingUVs(geometry: THREE.RingGeometry, innerR: number, outerR: number
     );
   }
   uv.needsUpdate = true;
-}
-
-// ---------------------------------------------------------------------------
-// Procedural Sun texture — canvas radial gradient, used as fallback
-// ---------------------------------------------------------------------------
-function makeSunCanvasTexture(): THREE.CanvasTexture {
-  const size = 512;
-  const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = size;
-  const ctx = canvas.getContext('2d')!;
-  const grad = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-  grad.addColorStop(0.0, '#fff7c0');
-  grad.addColorStop(0.3, '#ffdd44');
-  grad.addColorStop(0.7, '#ff8800');
-  grad.addColorStop(1.0, '#cc3300');
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, size, size);
-  return new THREE.CanvasTexture(canvas);
 }
 
 // ---------------------------------------------------------------------------
@@ -188,10 +173,12 @@ const EARTH_VERT = /* glsl */`
   varying vec2 vUv;
   varying vec3 vNormal;
   varying vec3 vWorldNormal;
+  varying vec3 vWorldPos;
   void main() {
     vUv = uv;
     vNormal = normalize(normalMatrix * normal);
     vWorldNormal = normalize((modelMatrix * vec4(normal, 0.0)).xyz);
+    vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
     #include <logdepthbuf_vertex>
   }
@@ -202,21 +189,43 @@ const EARTH_FRAG = /* glsl */`
   #include <logdepthbuf_pars_fragment>
   uniform sampler2D dayMap;
   uniform sampler2D nightMap;
+  uniform sampler2D cloudMap;
+  uniform float cloudShift;
   uniform vec3 sunDir;
   varying vec2 vUv;
   varying vec3 vNormal;
   varying vec3 vWorldNormal;
+  varying vec3 vWorldPos;
+  ECLIPSE_CHUNK
   void main() {
     #include <logdepthbuf_fragment>
     float intensity = dot(vWorldNormal, normalize(sunDir));
     float blend = smoothstep(-0.18, 0.30, intensity);
     vec4 day   = texture2D(dayMap, vUv);
     vec4 night = texture2D(nightMap, vUv);
+
+    // Eclipse: the Moon's umbra/penumbra darkens the day side; city lights
+    // stay visible inside the shadow (they would switch on).
+    float eVis = sunVisibility(vWorldPos);
+    float dayLight = blend * mix(0.03, 1.0, eVis);
+
+    // Specular ocean sun-glint: oceans are the blue-dominant day-map pixels
+    float oceanMask = smoothstep(0.02, 0.18, day.b - max(day.r, day.g));
+    vec3 viewDir = normalize(cameraPosition - vWorldPos);
+    vec3 halfV = normalize(normalize(sunDir) + viewDir);
+    float glint = pow(max(dot(normalize(vWorldNormal), halfV), 0.0), 90.0);
+    vec3 specular = vec3(1.0, 0.93, 0.78) * glint * oceanMask * 0.75 * dayLight;
+
+    // Cloud shadows: sample the cloud layer (rotated by cloudShift) and
+    // darken the surface beneath
+    float cloudA = texture2D(cloudMap, vec2(vUv.x + cloudShift, vUv.y)).a;
+    float cloudShadow = 1.0 - cloudA * 0.42;
+
     float limb = pow(1.0 - max(dot(normalize(vNormal), vec3(0.0, 0.0, 1.0)), 0.0), 2.0);
-    vec3 twilight = vec3(0.24, 0.42, 0.70) * smoothstep(-0.22, 0.04, intensity) * (1.0 - blend);
-    vec3 cityLights = night.rgb * 2.8 * (1.0 - blend);
-    vec3 color = mix(cityLights, day.rgb, blend);
-    color += twilight + vec3(0.12, 0.20, 0.34) * limb * 0.25;
+    vec3 twilight = vec3(0.24, 0.42, 0.70) * smoothstep(-0.22, 0.04, intensity) * (1.0 - blend) * eVis;
+    vec3 cityLights = night.rgb * 2.8 * (1.0 - dayLight);
+    vec3 color = mix(cityLights, day.rgb * cloudShadow, dayLight) + specular;
+    color += twilight + vec3(0.12, 0.20, 0.34) * limb * 0.25 * eVis;
     gl_FragColor = vec4(color, 1.0);
   }
 `;
@@ -224,13 +233,42 @@ const EARTH_FRAG = /* glsl */`
 // ---------------------------------------------------------------------------
 // Animated Sun and atmosphere shaders
 // ---------------------------------------------------------------------------
+// Shared GLSL 3D value-noise + FBM (sampled on the object-space sphere
+// direction, NOT UVs — kills the polar pinch and the longitude seam).
+const NOISE3_GLSL = /* glsl */`
+  float hash3(vec3 p) {
+    return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453123);
+  }
+  float noise3(vec3 p) {
+    vec3 i = floor(p);
+    vec3 f = fract(p);
+    vec3 u = f * f * (3.0 - 2.0 * f);
+    return mix(
+      mix(mix(hash3(i), hash3(i + vec3(1,0,0)), u.x),
+          mix(hash3(i + vec3(0,1,0)), hash3(i + vec3(1,1,0)), u.x), u.y),
+      mix(mix(hash3(i + vec3(0,0,1)), hash3(i + vec3(1,0,1)), u.x),
+          mix(hash3(i + vec3(0,1,1)), hash3(i + vec3(1,1,1)), u.x), u.y),
+      u.z);
+  }
+  float fbm(vec3 p) {
+    float v = 0.0;
+    float a = 0.5;
+    for (int i = 0; i < 4; i++) {
+      v += a * noise3(p);
+      p = p * 2.03 + vec3(19.7);
+      a *= 0.5;
+    }
+    return v;
+  }
+`;
+
 const SUN_VERT = /* glsl */`
   #include <common>
   #include <logdepthbuf_pars_vertex>
-  varying vec2 vUv;
+  varying vec3 vObjDir;
   varying vec3 vNormal;
   void main() {
-    vUv = uv;
+    vObjDir = normalize(position);
     vNormal = normalize(normalMatrix * normal);
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
     #include <logdepthbuf_vertex>
@@ -240,37 +278,83 @@ const SUN_VERT = /* glsl */`
 const SUN_FRAG = /* glsl */`
   #include <common>
   #include <logdepthbuf_pars_fragment>
-  uniform sampler2D sunMap;
   uniform float time;
-  varying vec2 vUv;
+  varying vec3 vObjDir;
   varying vec3 vNormal;
 
-  float hash(vec2 p) {
-    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
-  }
-
-  float noise(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    vec2 u = f * f * (3.0 - 2.0 * f);
-    return mix(
-      mix(hash(i + vec2(0.0, 0.0)), hash(i + vec2(1.0, 0.0)), u.x),
-      mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x),
-      u.y
-    );
-  }
+  ${NOISE3_GLSL}
 
   void main() {
     #include <logdepthbuf_fragment>
-    vec2 flowUv = vec2(vUv.x + time * 0.012, vUv.y);
-    vec3 tex = texture2D(sunMap, flowUv).rgb;
-    float granules = noise(vUv * 46.0 + time * 0.45);
-    float cells = noise(vUv * 16.0 - time * 0.18);
-    float rim = pow(1.0 - max(vNormal.z, 0.0), 1.6);
-    vec3 plasma = mix(vec3(1.0, 0.42, 0.04), vec3(1.0, 0.92, 0.42), cells);
-    vec3 color = max(tex, plasma) * (1.15 + granules * 0.55);
-    color += vec3(1.0, 0.45, 0.05) * rim * 1.2;
-    gl_FragColor = vec4(color, 1.0);
+    vec3 dir = normalize(vObjDir);
+
+    // Supergranulation: slow, large convection cells
+    float superCells = fbm(dir * 5.0 + vec3(0.0, time * 0.008, 0.0));
+    // Domain-warped granulation: fast churning small cells
+    vec3 warp = vec3(fbm(dir * 7.0 + time * 0.02)) * 2.4;
+    float gran = fbm(dir * 34.0 + warp + vec3(time * 0.05));
+    // Bright faculae filaments where warp gradients pinch
+    float filaments = pow(fbm(dir * 15.0 - warp * 0.8 + vec3(0.0, -time * 0.015, 0.0)), 3.0);
+
+    // Temperature ramp: deep orange troughs → white-yellow cell centres
+    float t = clamp(superCells * 0.45 + gran * 0.75, 0.0, 1.3);
+    vec3 cool = vec3(0.95, 0.28, 0.02);
+    vec3 hot  = vec3(1.0, 0.96, 0.62);
+    vec3 color = mix(cool, hot, t) + vec3(1.0, 0.85, 0.5) * filaments * 0.8;
+
+    // Physically-correct limb darkening: photosphere is BRIGHTER at disk
+    // centre (mu=1) and darker at the limb (mu=0) — I/I0 = 1 − u(1 − mu)
+    float mu = clamp(dot(normalize(vNormal), vec3(0.0, 0.0, 1.0)), 0.0, 1.0);
+    color *= 0.35 + 0.65 * mu;
+
+    // HDR output: exceed the bloom threshold (0.82) so UnrealBloomPass
+    // produces the glow naturally from the brightest granules.
+    gl_FragColor = vec4(color * 2.6, 1.0);
+  }
+`;
+
+// Corona: camera-facing billboard quad with radial FBM streamers.
+const CORONA_VERT = /* glsl */`
+  #include <common>
+  #include <logdepthbuf_pars_vertex>
+  varying vec2 vQuad;
+  void main() {
+    vQuad = position.xy;
+    // Billboard: strip rotation from the modelView transform
+    vec4 mvPosition = modelViewMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+    mvPosition.xy += position.xy;
+    gl_Position = projectionMatrix * mvPosition;
+    #include <logdepthbuf_vertex>
+  }
+`;
+
+const CORONA_FRAG = /* glsl */`
+  #include <common>
+  #include <logdepthbuf_pars_fragment>
+  uniform float time;
+  uniform float sunRadius;   // in quad-local units (quad spans ±1)
+  varying vec2 vQuad;
+
+  ${NOISE3_GLSL}
+
+  void main() {
+    #include <logdepthbuf_fragment>
+    float r = length(vQuad);
+    if (r < sunRadius * 0.85) discard; // hidden behind the disk anyway
+    float ang = atan(vQuad.y, vQuad.x);
+
+    // Radial streamers: noise stretched hard along the radius
+    float streamers = fbm(vec3(cos(ang), sin(ang), 0.0) * 3.0
+                        + vec3(0.0, 0.0, r * 1.5 - time * 0.012));
+    streamers = 0.55 + 0.45 * streamers;
+
+    // 1/r^2.2 falloff from the limb outward
+    float fall = pow(clamp(sunRadius / max(r, 1e-4), 0.0, 1.0), 2.2);
+    float limbFade = smoothstep(sunRadius * 0.85, sunRadius * 1.05, r);
+    float alpha = fall * limbFade * streamers * 0.55;
+
+    vec3 color = mix(vec3(1.0, 0.55, 0.18), vec3(1.0, 0.85, 0.55), fall);
+    gl_FragColor = vec4(color * alpha, alpha);
   }
 `;
 
@@ -321,8 +405,19 @@ export class CelestialBody {
   // For Earth's day/night shader
   private earthUniforms: { sunDir: { value: THREE.Vector3 } } | null = null;
   private sunUniforms: { time: { value: number } } | null = null;
+  private coronaUniforms: { time: { value: number }; sunRadius: { value: number } } | null = null;
   private cloudMesh: THREE.Mesh | null = null;
   private atmosphereMesh: THREE.Mesh | null = null;
+  private scatterAtmo: AtmosphereHandle | null = null;
+  private scatterShellScale = 1;
+  private ringHandle: RingMaterialHandle | null = null;
+  private ringNormalWorld = new THREE.Vector3(0, 1, 0);
+  private ringShadowUniforms: RingShadowUniforms | null = null;
+
+  /** Analytic eclipse-shadow uniforms (null for the Sun). main.ts updates these. */
+  eclipseUniforms: EclipseUniforms | null = null;
+  private earthCloudTexture: THREE.Texture | null = null;
+  private earthCloudShift: { value: number } | null = null;
 
   // Keep a scene ref for later removal
   private scene: THREE.Scene;
@@ -371,37 +466,35 @@ export class CelestialBody {
     let mat: THREE.Material;
 
     if (this.state.isEmissive) {
-      // Sun — animated emissive shader so UnrealBloomPass picks it up.
-      const fallback = makeSunCanvasTexture();
-      const uniforms = {
-        sunMap: { value: fallback as THREE.Texture },
-        time:   { value: 0 },
-      };
+      // Sun — fully procedural animated photosphere (3D noise on the sphere
+      // direction: no UV seams or polar pinch) with HDR output for bloom.
+      const uniforms = { time: { value: 0 } };
       this.sunUniforms = { time: uniforms.time };
       mat = new THREE.ShaderMaterial({
         uniforms,
         vertexShader: SUN_VERT,
         fragmentShader: SUN_FRAG,
       });
-      if (this.state.texturePath) {
-        tl.load(this.state.texturePath, tex => {
-          tex.colorSpace = THREE.SRGBColorSpace;
-          uniforms.sunMap.value = tex;
-          mat.needsUpdate = true;
-        });
-      }
+      this._buildCorona();
     } else if (this.state.id === 'earth' && this.state.nightTexturePath) {
-      // Earth — custom day/night shader
+      // Earth — custom day/night shader with eclipse, ocean glint, cloud shadows
+      this.eclipseUniforms = makeEclipseUniforms();
+      const cloudTex = makeEarthCloudTexture();
+      this.earthCloudTexture = cloudTex;
       const uniforms = {
-        dayMap:   { value: null as THREE.Texture | null },
-        nightMap: { value: null as THREE.Texture | null },
-        sunDir:   { value: new THREE.Vector3(1, 0, 0) },
+        dayMap:     { value: null as THREE.Texture | null },
+        nightMap:   { value: null as THREE.Texture | null },
+        cloudMap:   { value: cloudTex as THREE.Texture },
+        cloudShift: { value: 0 },
+        sunDir:     { value: new THREE.Vector3(1, 0, 0) },
+        ...this.eclipseUniforms,
       };
       this.earthUniforms = uniforms as unknown as { sunDir: { value: THREE.Vector3 } };
+      this.earthCloudShift = uniforms.cloudShift;
       mat = new THREE.ShaderMaterial({
         uniforms,
         vertexShader: EARTH_VERT,
-        fragmentShader: EARTH_FRAG,
+        fragmentShader: EARTH_FRAG.replace('ECLIPSE_CHUNK', ECLIPSE_GLSL),
       });
       if (this.state.texturePath) {
         tl.load(this.state.texturePath, tex => {
@@ -422,6 +515,18 @@ export class CelestialBody {
         emissive: new THREE.Color(this.state.id === 'venus' ? 0x120905 : 0x000000),
         emissiveIntensity: this.state.id === 'venus' ? 0.08 : 0,
       });
+
+      // Analytic eclipse shadows; Saturn additionally gets its ring shadow
+      if (this.state.id === 'saturn') {
+        this.ringShadowUniforms = makeRingShadowUniforms();
+        this.eclipseUniforms = patchStandardMaterialForEclipse(mat, {
+          uniforms: this.ringShadowUniforms as unknown as Record<string, { value: unknown }>,
+          fragmentDeclarations: RING_SHADOW_GLSL,
+          fragmentCode: 'diffuseColor.rgb *= ringShadowFactor(vEclipseWorldPos, uRsInner / 1.25);',
+        });
+      } else {
+        this.eclipseUniforms = patchStandardMaterialForEclipse(mat);
+      }
 
       // Try to load texture; use procedural fallback for gas giants
       const gasGiantStripes = GAS_GIANT_STRIPES[this.state.id];
@@ -459,23 +564,50 @@ export class CelestialBody {
     const geo = new THREE.RingGeometry(innerR, outerR, 128, 4);
     fixRingUVs(geo, innerR, outerR);
 
-    const mat = new THREE.MeshBasicMaterial({
-      color: 0xC2B280,
-      side: THREE.DoubleSide,
-      transparent: true,
-      opacity: 0.75,
-      depthWrite: false,
-    });
+    // Lit ring shader: sun diffuse, planet shadow sweep, backlit
+    // forward-scatter glow
+    this.ringHandle = buildLitRingMaterial(0.9);
+    const mat = this.ringHandle.material;
 
     tl.load('/textures/saturn_rings.png', tex => {
       tex.colorSpace = THREE.SRGBColorSpace;
-      mat.map = tex; mat.needsUpdate = true;
+      mat.uniforms['map']!.value = tex;
+      mat.needsUpdate = true;
     });
 
     const ringMesh = new THREE.Mesh(geo, mat);
     ringMesh.rotation.x = Math.PI / 2;
-    ringMesh.receiveShadow = true;
     this.tiltGroup.add(ringMesh);
+
+    // Ring plane world normal: tiltGroup's rotation is fixed at construction
+    this.ringNormalWorld
+      .set(0, 1, 0)
+      .applyEuler(this.tiltGroup.rotation)
+      .normalize();
+  }
+
+  private _buildCorona(): void {
+    // Billboard quad spanning ±3.2 sun radii; the shader draws the streamers.
+    const size = this.visualRadius * 3.2;
+    const geo = new THREE.PlaneGeometry(size * 2, size * 2);
+    this.coronaUniforms = {
+      time: { value: 0 },
+      sunRadius: { value: this.visualRadius / size },
+    };
+    const mat = new THREE.ShaderMaterial({
+      uniforms: this.coronaUniforms,
+      vertexShader: CORONA_VERT,
+      fragmentShader: CORONA_FRAG,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const quad = new THREE.Mesh(geo, mat);
+    quad.frustumCulled = false;
+    quad.renderOrder = 2;
+    // Child of the outer group (not tiltGroup) so group scaling applies but
+    // axial tilt doesn't matter — the quad billboards in the vertex shader.
+    this.group.add(quad);
   }
 
   private _buildProceduralRings(spec: RingSpec): void {
@@ -500,7 +632,8 @@ export class CelestialBody {
   private _buildEarthCloudLayer(): void {
     const geo = new THREE.SphereGeometry(this.visualRadius * 1.012, 64, 32);
     const mat = new THREE.MeshPhongMaterial({
-      map: makeEarthCloudTexture(),
+      // Shares the surface shader's cloud texture so cast shadows match
+      map: this.earthCloudTexture ?? makeEarthCloudTexture(),
       color: 0xffffff,
       transparent: true,
       opacity: 0.42,
@@ -513,6 +646,18 @@ export class CelestialBody {
   }
 
   private _buildAtmosphere(): void {
+    // Planets with tuned scattering params get the physically-based
+    // raymarched atmosphere; the rest keep the cheap fresnel glow shell.
+    if (ATMOSPHERE_PARAMS[this.state.id]) {
+      const handle = buildScatteringAtmosphere(this.state.id, this.visualRadius);
+      if (handle) {
+        this.scatterAtmo = handle;
+        this.scatterShellScale = ATMOSPHERE_PARAMS[this.state.id]!.shellScale;
+        this.group.add(handle.mesh);
+        return;
+      }
+    }
+
     const atmRadius = this.visualRadius * (this.state.id === 'earth' ? 1.16 : 1.10);
     const geo = new THREE.SphereGeometry(atmRadius, 48, 24);
     const atmColor = this.state.id === 'earth'   ? 0x4488FF
@@ -548,10 +693,47 @@ export class CelestialBody {
     this._setScenePosition(logScale, lerpT);
     this._updateGroupScale(lerpT, realScale);
 
+    if (this.scatterAtmo) {
+      const worldR = this.visualRadius * this.group.scale.x;
+      this.scatterAtmo.uniforms.uPlanetCenter.value.copy(this.group.position);
+      this.scatterAtmo.uniforms.uPlanetRadius.value = worldR;
+      this.scatterAtmo.uniforms.uAtmoRadius.value = worldR * this.scatterShellScale;
+    }
+
+    if (this.ringHandle) {
+      const worldR = this.visualRadius * this.group.scale.x;
+      this.ringHandle.uniforms.uPlanetCenter.value.copy(this.group.position);
+      this.ringHandle.uniforms.uPlanetRadius.value = worldR;
+      this.ringHandle.uniforms.uRingNormal.value.copy(this.ringNormalWorld);
+    }
+
+    if (this.ringShadowUniforms) {
+      const worldR = this.visualRadius * this.group.scale.x;
+      this.ringShadowUniforms.uRsCenter.value.copy(this.group.position);
+      this.ringShadowUniforms.uRsNormal.value.copy(this.ringNormalWorld);
+      this.ringShadowUniforms.uRsInner.value = worldR * 1.25;
+      this.ringShadowUniforms.uRsOuter.value = worldR * 2.4;
+    }
+  }
+
+  /**
+   * Update sun-dependent uniforms from the Sun's actual scene position
+   * (the Sun drifts off the origin under N-body forces; a spawned star can
+   * be anywhere).
+   */
+  updateSunPosition(sunScenePos: THREE.Vector3): void {
     if (this.earthUniforms) {
-      const bodyPos = this.group.position;
-      const dir = new THREE.Vector3(-bodyPos.x, -bodyPos.y, -bodyPos.z).normalize();
-      this.earthUniforms.sunDir.value.copy(dir);
+      this.earthUniforms.sunDir.value
+        .copy(sunScenePos).sub(this.group.position).normalize();
+    }
+    if (this.scatterAtmo) {
+      this.scatterAtmo.uniforms.uSunPos.value.copy(sunScenePos);
+    }
+    if (this.ringHandle) {
+      this.ringHandle.uniforms.uSunPos.value.copy(sunScenePos);
+    }
+    if (this.ringShadowUniforms) {
+      this.ringShadowUniforms.uRsSunPos.value.copy(sunScenePos);
     }
   }
 
@@ -609,6 +791,9 @@ export class CelestialBody {
     if (this.sunUniforms) {
       this.sunUniforms.time.value += dtSeconds;
     }
+    if (this.coronaUniforms) {
+      this.coronaUniforms.time.value += dtSeconds;
+    }
 
     if (this.state.rotationPeriod) {
       // Physics-based rotation: angular velocity = 2π / period, scaled by sim time
@@ -622,6 +807,12 @@ export class CelestialBody {
 
     if (this.cloudMesh) {
       this.cloudMesh.rotation.y += dtSeconds * timeScale * 0.000025;
+      // Keep the surface shader's cloud-shadow sample aligned with the
+      // independently-rotating cloud layer
+      if (this.earthCloudShift) {
+        this.earthCloudShift.value =
+          (this.mesh.rotation.y - this.cloudMesh.rotation.y) / (2 * Math.PI);
+      }
     }
   }
 
@@ -657,6 +848,7 @@ export class CelestialBody {
 
   setAtmosphereVisible(visible: boolean): void {
     if (this.atmosphereMesh) this.atmosphereMesh.visible = visible;
+    if (this.scatterAtmo) this.scatterAtmo.mesh.visible = visible;
     if (this.cloudMesh) this.cloudMesh.visible = visible;
   }
 
