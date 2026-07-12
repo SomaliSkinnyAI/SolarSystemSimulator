@@ -21,8 +21,11 @@ export class BodySelector {
 
   private _selectedBody: CelestialBody | null = null;
 
-  // Selection ring
-  private selectionRing: THREE.Mesh;
+  // Screen-space selection brackets (DOM) — a 3D ring would clash with
+  // planetary ring systems and vanish inside/behind geometry.
+  private marker: HTMLDivElement;
+  private _projTmp = new THREE.Vector3();
+  private _edgeTmp = new THREE.Vector3();
 
   // God Mode
   private godMode = false;
@@ -52,19 +55,16 @@ export class BodySelector {
     this.sceneManager = sceneManager;
     this.getLogScale  = getLogScale;
 
-    // Selection ring
-    const ringGeo = new THREE.RingGeometry(1, 1.08, 64);
-    const ringMat = new THREE.MeshBasicMaterial({
-      color: 0xFFFFFF,
-      side: THREE.DoubleSide,
-      transparent: true,
-      opacity: 0.55,
-      depthWrite: false,
-    });
-    this.selectionRing = new THREE.Mesh(ringGeo, ringMat);
-    this.selectionRing.visible = false;
-    this.selectionRing.renderOrder = 1;
-    scene.add(this.selectionRing);
+    // Selection brackets — four corner ticks tracking the body on screen
+    this.marker = document.createElement('div');
+    this.marker.id = 'selection-marker';
+    for (const corner of ['tl', 'tr', 'bl', 'br']) {
+      const span = document.createElement('span');
+      span.className = `sel-corner sel-${corner}`;
+      this.marker.appendChild(span);
+    }
+    this.marker.style.display = 'none';
+    document.body.appendChild(this.marker);
 
     // Event listeners
     renderer.domElement.addEventListener('click',     e => this._onClick(e));
@@ -116,16 +116,38 @@ export class BodySelector {
   update(): void {
     const body = this._selectedBody;
     if (!body) {
-      this.selectionRing.visible = false;
+      this.marker.style.display = 'none';
       return;
     }
-    // Displayed radius = visualRadius × group scale (scale varies per frame
-    // with log/real-scale modes) — without it the ring hides inside the mesh.
-    const r = body.visualRadius * body.group.scale.x * 1.55;
-    this.selectionRing.position.copy(body.group.position);
-    this.selectionRing.scale.set(r, r, r);
-    this.selectionRing.lookAt(this.camera.position);
-    this.selectionRing.visible = true;
+
+    // Project the body centre to screen space
+    const proj = this._projTmp.copy(body.group.position).project(this.camera);
+    if (proj.z > 1 || proj.z < -1) {
+      this.marker.style.display = 'none'; // behind the camera
+      return;
+    }
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const cx = rect.left + (proj.x + 1) / 2 * rect.width;
+    const cy = rect.top + (1 - proj.y) / 2 * rect.height;
+
+    // Projected pixel radius: displace the centre by one display radius
+    // along the camera's right axis and measure the screen-space distance
+    const displayR = body.visualRadius * body.group.scale.x;
+    this._edgeTmp.set(1, 0, 0)
+      .applyQuaternion(this.camera.quaternion)
+      .multiplyScalar(displayR)
+      .add(body.group.position)
+      .project(this.camera);
+    const ex = rect.left + (this._edgeTmp.x + 1) / 2 * rect.width;
+    const ey = rect.top + (1 - this._edgeTmp.y) / 2 * rect.height;
+    const pxRadius = Math.hypot(ex - cx, ey - cy);
+
+    const half = Math.max(16, Math.min(220, pxRadius * 1.45 + 8));
+    this.marker.style.display = 'block';
+    this.marker.style.left = `${cx - half}px`;
+    this.marker.style.top = `${cy - half}px`;
+    this.marker.style.width = `${half * 2}px`;
+    this.marker.style.height = `${half * 2}px`;
   }
 
   // ---------------------------------------------------------------------------
@@ -242,8 +264,6 @@ export class BodySelector {
   isGodMode(): boolean { return this.godMode; }
 
   dispose(): void {
-    this.scene.remove(this.selectionRing);
-    this.selectionRing.geometry.dispose();
-    (this.selectionRing.material as THREE.Material).dispose();
+    this.marker.remove();
   }
 }

@@ -869,6 +869,30 @@
       #cheatsheet h3 { margin: 0 0 10px; color: #ffd257; font-size: 13px; letter-spacing: 0.1em; }
       #cheatsheet .keys { display: grid; grid-template-columns: auto auto; gap: 4px 18px; }
       #cheatsheet .k { color: #93d3a2; }
+      /* ---- Selection brackets: screen-space corner ticks ---- */
+      #selection-marker {
+        position: fixed;
+        z-index: 90;
+        pointer-events: none;
+        animation: sel-pulse 2.4s ease-in-out infinite;
+      }
+      #selection-marker .sel-corner {
+        position: absolute;
+        width: 12px;
+        height: 12px;
+        border: 0 solid rgba(220, 230, 255, 0.85);
+        filter: drop-shadow(0 0 3px rgba(160, 190, 255, 0.7));
+      }
+      #selection-marker .sel-tl { top: 0; left: 0; border-top-width: 2px; border-left-width: 2px; }
+      #selection-marker .sel-tr { top: 0; right: 0; border-top-width: 2px; border-right-width: 2px; }
+      #selection-marker .sel-bl { bottom: 0; left: 0; border-bottom-width: 2px; border-left-width: 2px; }
+      #selection-marker .sel-br { bottom: 0; right: 0; border-bottom-width: 2px; border-right-width: 2px; }
+      @keyframes sel-pulse {
+        0%, 100% { opacity: 0.55; }
+        50% { opacity: 1; }
+      }
+      body.photo-mode #selection-marker { display: none !important; }
+
       .card-fact {
         margin-top: 8px;
         padding-top: 8px;

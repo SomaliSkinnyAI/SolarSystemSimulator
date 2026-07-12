@@ -114,6 +114,20 @@ function makeNoise2D(): (x: number, y: number) => number {
   };
 }
 
+// Notable nebulae / satellite galaxies at their real galactic coordinates.
+// [lDeg, bDeg, sigmaDeg, r, g, b, strength]
+const NEBULAE: Array<[number, number, number, number, number, number, number]> = [
+  [6.0, -1.2, 3.2, 1.00, 0.42, 0.50, 0.40],   // Lagoon / Sagittarius H-alpha complex
+  [287.6, -0.6, 2.8, 1.00, 0.48, 0.44, 0.45], // Carina Nebula
+  [85.0, -1.0, 3.8, 1.00, 0.40, 0.42, 0.38],  // Cygnus / North America region
+  [209.0, -19.4, 2.2, 1.00, 0.55, 0.65, 0.35],// Orion complex (below the plane)
+  [353.0, 17.0, 3.0, 0.92, 0.62, 0.42, 0.26], // Rho Ophiuchi (dusty yellow)
+  [160.0, -12.0, 1.8, 1.00, 0.50, 0.55, 0.22],// California Nebula
+  [263.0, -3.0, 3.4, 0.90, 0.50, 0.60, 0.26], // Vela / Gum fragment
+  [280.5, -32.9, 2.6, 0.85, 0.87, 1.00, 0.45],// Large Magellanic Cloud
+  [302.8, -44.3, 1.7, 0.82, 0.86, 1.00, 0.34],// Small Magellanic Cloud
+];
+
 function makeMilkyWayTexture(): THREE.CanvasTexture {
   const W = 1024, H = 512;
   const canvas = document.createElement('canvas');
@@ -126,6 +140,7 @@ function makeMilkyWayTexture(): THREE.CanvasTexture {
     for (let o = 0; o < 4; o++) { v += a * noise(fx, fy); fx *= 2.1; fy *= 2.1; a *= 0.5; }
     return v;
   };
+  const wrapDL = (a: number, b: number) => ((a - b + 540) % 360) - 180;
 
   const cosOb = Math.cos(OBLIQUITY), sinOb = Math.sin(OBLIQUITY);
   for (let py = 0; py < H; py++) {
@@ -153,27 +168,43 @@ function makeMilkyWayTexture(): THREE.CanvasTexture {
       const bDeg = b * 180 / Math.PI;
       const lDeg = l * 180 / Math.PI; // 0 = galactic centre (Sagittarius)
 
-      // Band: bright near the plane, cloudy structure along it
-      const clouds = 0.45 + 0.55 * fbm(lDeg * 0.055 + 7.3, bDeg * 0.11);
-      let band = Math.exp(-(bDeg * bDeg) / (2 * 11 * 11)) * clouds;
+      // Band: near the plane, cloudy structure along it (subtler than v1)
+      const clouds = 0.40 + 0.60 * fbm(lDeg * 0.055 + 7.3, bDeg * 0.11);
+      const band = 0.72 * Math.exp(-(bDeg * bDeg) / (2 * 10 * 10)) * clouds;
 
       // Central bulge toward l = 0
-      const bulge = 0.85 * Math.exp(-(lDeg * lDeg) / (2 * 24 * 24) - (bDeg * bDeg) / (2 * 12 * 12));
+      const bulge = 0.55 * Math.exp(-(lDeg * lDeg) / (2 * 22 * 22) - (bDeg * bDeg) / (2 * 11 * 11));
 
-      // Dark dust lane hugging the plane, strongest through the inner galaxy
+      // Dark dust: main lane hugging the plane + patchy secondary rifts
       const laneOffset = 2.2 * Math.sin(lDeg * Math.PI / 90);
-      const laneStrength = 0.65 * Math.exp(-(lDeg * lDeg) / (2 * 65 * 65));
-      const lane = 1 - laneStrength * Math.exp(-((bDeg - laneOffset) ** 2) / (2 * 2.6 * 2.6))
-        * (0.5 + 0.5 * fbm(lDeg * 0.09, bDeg * 0.3 + 41.7));
+      const laneStrength = 0.8 * Math.exp(-(lDeg * lDeg) / (2 * 70 * 70));
+      let lane = 1 - laneStrength * Math.exp(-((bDeg - laneOffset) ** 2) / (2 * 2.4 * 2.4))
+        * (0.55 + 0.45 * fbm(lDeg * 0.09, bDeg * 0.3 + 41.7));
+      // Great Rift patchiness (Aquila→Cygnus, l ~ 20–90)
+      const rift = Math.exp(-((wrapDL(lDeg, 50)) ** 2) / (2 * 38 * 38) - (bDeg - 1) ** 2 / (2 * 3.2 * 3.2));
+      lane *= 1 - 0.45 * rift * (0.4 + 0.6 * fbm(lDeg * 0.13 + 91.2, bDeg * 0.4));
 
-      let intensity = (band + bulge) * lane;
-      intensity = Math.max(0, Math.min(1.25, intensity));
+      const intensity = Math.max(0, Math.min(1.1, (band + bulge) * lane));
 
       // Warm core, bluish rim
-      const warm = Math.max(0, Math.min(1, bulge * 1.6));
-      const r = intensity * (0.62 + 0.30 * warm);
-      const g = intensity * (0.64 + 0.22 * warm);
-      const bl = intensity * (0.78 + 0.05 * warm);
+      const warm = Math.max(0, Math.min(1, bulge * 2.2));
+      let r = intensity * (0.60 + 0.30 * warm);
+      let g = intensity * (0.62 + 0.20 * warm);
+      let bl = intensity * (0.76 + 0.04 * warm);
+
+      // Colored nebulae + Magellanic Clouds at their true galactic positions
+      for (const [nl, nb, sigma, nr, ng, nbl, strength] of NEBULAE) {
+        const dl = wrapDL(lDeg, nl);
+        const db = bDeg - nb;
+        const d2 = dl * dl + db * db;
+        if (d2 > sigma * sigma * 12) continue;
+        const gauss = Math.exp(-d2 / (2 * sigma * sigma));
+        const wisp = 0.35 + 0.65 * fbm(dl * 0.9 + nl * 0.7, db * 0.9 + nb);
+        const amp = gauss * wisp * strength;
+        r += nr * amp;
+        g += ng * amp;
+        bl += nbl * amp;
+      }
 
       const idx = (py * W + px) * 4;
       img.data[idx]     = Math.round(Math.min(1, r) * 255);
@@ -210,7 +241,7 @@ export class StarField {
       map: tex,
       side: THREE.BackSide,
       transparent: true,
-      opacity: 0.38,
+      opacity: 0.2, // subtle: the sky should read as black with a faint band
       blending: THREE.AdditiveBlending,
       depthWrite: false,
     });
