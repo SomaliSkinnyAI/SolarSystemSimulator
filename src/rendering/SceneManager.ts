@@ -12,7 +12,7 @@ import { CelestialBody } from '../physics/CelestialBody';
 import { StarField } from './StarField';
 import { CameraDirector } from './CameraDirector';
 import { RenderConfig, CameraConfig } from '../types';
-import { AU, randRange } from '../utils/MathUtils';
+import { AU, randRange, collinearLagrangeGamma } from '../utils/MathUtils';
 import { DISPLAY_SCALE, physicsToScene } from '../utils/CoordinateSystem';
 
 // ---------------------------------------------------------------------------
@@ -649,45 +649,64 @@ export class SceneManager {
   // ---------------------------------------------------------------------------
   // Lagrange points visualisation
   // ---------------------------------------------------------------------------
-  updateLagrangePoints(primary: CelestialBody | null, secondary: CelestialBody | null): void {
-    if (!primary || !secondary) {
+  /**
+   * Exact L1–L5 for the (primary, secondary) pair, computed in PHYSICS space
+   * (Euler-quintic collinear points, true equilateral L4/L5 in the actual
+   * orbital plane) then mapped through physicsToScene — correct in every
+   * view mode, including log scale where naive scene-space math distorts.
+   */
+  updateLagrangePoints(
+    primary: CelestialBody | null,
+    secondary: CelestialBody | null,
+    logScale = false,
+    lerpT = 0
+  ): void {
+    if (!primary || !secondary || secondary.state.isSpacecraft) {
       this.lagrangeSprites.forEach(s => (s.visible = false));
       return;
     }
 
-    const p1 = primary.group.position;
-    const p2 = secondary.group.position;
-    const r  = p1.distanceTo(p2);
-    const m1 = primary.state.mass;
-    const m2 = secondary.state.mass;
+    const p1 = primary.state.position;
+    const p2 = secondary.state.position;
+    const v1 = primary.state.velocity;
+    const v2 = secondary.state.velocity;
+    const R = p1.distanceTo(p2);
+    if (R < 1) {
+      this.lagrangeSprites.forEach(s => (s.visible = false));
+      return;
+    }
+    const mu = secondary.state.mass / (primary.state.mass + secondary.state.mass);
+    const axis = new THREE.Vector3().subVectors(p2, p1).divideScalar(R);
 
-    // L1, L2: along the p1→p2 axis at Hill sphere distance from p2
-    const hillR = r * Math.pow(m2 / (3 * m1), 1 / 3);
-    const axis  = new THREE.Vector3().subVectors(p2, p1).normalize();
+    const g1 = collinearLagrangeGamma(mu, 'L1');
+    const g2 = collinearLagrangeGamma(mu, 'L2');
 
-    const positions: THREE.Vector3[] = [
-      p2.clone().addScaledVector(axis, -hillR),              // L1
-      p2.clone().addScaledVector(axis, +hillR),              // L2
-      p1.clone().addScaledVector(axis, -(r - hillR)),        // L3 (approx)
-      // L4, L5: ±60° from p1→p2
-      this._rotateAroundY(p2.clone(), p1, Math.PI / 3),     // L4
-      this._rotateAroundY(p2.clone(), p1, -Math.PI / 3),    // L5
+    // Orbital plane normal from the actual relative motion
+    const relV = new THREE.Vector3().subVectors(v2, v1);
+    const normal = new THREE.Vector3().crossVectors(axis, relV);
+    if (normal.lengthSq() < 1e-12) normal.set(0, 1, 0);
+    normal.normalize();
+
+    const rel = new THREE.Vector3().subVectors(p2, p1);
+    const l4 = rel.clone().applyAxisAngle(normal, Math.PI / 3).add(p1);
+    const l5 = rel.clone().applyAxisAngle(normal, -Math.PI / 3).add(p1);
+
+    const physPositions: THREE.Vector3[] = [
+      p2.clone().addScaledVector(axis, -g1 * R),                 // L1
+      p2.clone().addScaledVector(axis, +g2 * R),                 // L2
+      p1.clone().addScaledVector(axis, -R * (1 + 5 * mu / 12)),  // L3 (1st order)
+      l4,
+      l5,
     ];
 
+    const spriteScale = logScale ? 0.05 : 1.5;
+    const tmp = SceneManager._ringTmp;
     for (let i = 0; i < 5; i++) {
-      this.lagrangeSprites[i]!.position.copy(positions[i]!);
+      physicsToScene(physPositions[i]!, logScale, lerpT, tmp);
+      this.lagrangeSprites[i]!.position.copy(tmp);
+      this.lagrangeSprites[i]!.scale.set(spriteScale, spriteScale, 1);
       this.lagrangeSprites[i]!.visible = true;
     }
-  }
-
-  private _rotateAroundY(point: THREE.Vector3, pivot: THREE.Vector3, angle: number): THREE.Vector3 {
-    const rel = point.sub(pivot);
-    const cos = Math.cos(angle), sin = Math.sin(angle);
-    return new THREE.Vector3(
-      rel.x * cos - rel.z * sin + pivot.x,
-      rel.y,
-      rel.x * sin + rel.z * cos + pivot.z
-    );
   }
 
   // ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { CelestialBody } from './CelestialBody';
 import { SimulationConfig } from '../types';
-import { softDistance, distance3 } from '../utils/MathUtils';
+import { softDistance, distance3, SPEED_OF_LIGHT } from '../utils/MathUtils';
 import { nextBodyId } from '../data/solarSystemData';
 
 // ---------------------------------------------------------------------------
@@ -181,7 +181,7 @@ export class PhysicsEngine {
     const vel0: THREE.Vector3[] = this.bodies.map(b => POOL.get().copy(b.state.velocity));
 
     // k1
-    const acc1 = this._computeAccelerations(pos0);
+    const acc1 = this._computeAccelerations(pos0, vel0);
     const dp1 = vel0;
     const dv1 = acc1;
 
@@ -192,7 +192,7 @@ export class PhysicsEngine {
     const vel2: THREE.Vector3[] = this.bodies.map((_, i) => {
       return POOL.get().copy(vel0[i]!).addScaledVector(dv1[i]!, h * 0.5);
     });
-    const acc2 = this._computeAccelerations(pos2);
+    const acc2 = this._computeAccelerations(pos2, vel2);
     const dp2 = vel2;
     const dv2 = acc2;
 
@@ -203,7 +203,7 @@ export class PhysicsEngine {
     const vel3: THREE.Vector3[] = this.bodies.map((_, i) => {
       return POOL.get().copy(vel0[i]!).addScaledVector(dv2[i]!, h * 0.5);
     });
-    const acc3 = this._computeAccelerations(pos3);
+    const acc3 = this._computeAccelerations(pos3, vel3);
     const dp3 = vel3;
     const dv3 = acc3;
 
@@ -214,7 +214,7 @@ export class PhysicsEngine {
     const vel4: THREE.Vector3[] = this.bodies.map((_, i) => {
       return POOL.get().copy(vel0[i]!).addScaledVector(dv3[i]!, h);
     });
-    const acc4 = this._computeAccelerations(pos4);
+    const acc4 = this._computeAccelerations(pos4, vel4);
     const dv4 = acc4;
 
     // Combine: new_state = old + (h/6)*(k1 + 2k2 + 2k3 + k4)
@@ -241,7 +241,8 @@ export class PhysicsEngine {
     const positions = this.bodies.map(b => b.state.position);
 
     // a(t)
-    const acc0 = this._computeAccelerations(positions);
+    const velocities = this.bodies.map(b => b.state.velocity);
+    const acc0 = this._computeAccelerations(positions, velocities);
 
     // Update positions: r(t+h) = r(t) + v(t)*h + 0.5*a(t)*h²
     for (let i = 0; i < n; i++) {
@@ -251,7 +252,7 @@ export class PhysicsEngine {
     }
 
     // a(t+h)
-    const acc1 = this._computeAccelerations(this.bodies.map(b => b.state.position));
+    const acc1 = this._computeAccelerations(this.bodies.map(b => b.state.position), velocities);
 
     // Update velocities: v(t+h) = v(t) + 0.5*(a(t)+a(t+h))*h
     for (let i = 0; i < n; i++) {
@@ -264,11 +265,52 @@ export class PhysicsEngine {
   // ---------------------------------------------------------------------------
   // Gravitational acceleration computation
   // ---------------------------------------------------------------------------
-  private _computeAccelerations(positions: THREE.Vector3[]): THREE.Vector3[] {
-    if (this.bodies.length > 50) {
-      return this._computeAccelerationsBarnesHut(positions);
+  private _computeAccelerations(positions: THREE.Vector3[], velocities?: THREE.Vector3[]): THREE.Vector3[] {
+    const acc = this.bodies.length > 50
+      ? this._computeAccelerationsBarnesHut(positions)
+      : this._computeAccelerationsBrute(positions);
+    if (this.config.relativity && velocities) {
+      this._applyRelativity(positions, velocities, acc);
     }
-    return this._computeAccelerationsBrute(positions);
+    return acc;
+  }
+
+  /**
+   * First post-Newtonian solar correction (Montenbruck & Gill eq. 3.146):
+   *   a_GR = μ/(c²r³) · [ (4μ/r − v·v)·r_vec + 4(r_vec·v_vec)·v_vec ]
+   * Reproduces Mercury's anomalous 43″/century perihelion precession.
+   * Sun-term only — planet-planet 1PN terms are far below visual relevance.
+   */
+  private _applyRelativity(
+    positions: THREE.Vector3[],
+    velocities: THREE.Vector3[],
+    acc: THREE.Vector3[]
+  ): void {
+    const sunIdx = this.bodies.findIndex(b => b.state.id === 'sun');
+    if (sunIdx === -1) return;
+    const c2 = SPEED_OF_LIGHT * SPEED_OF_LIGHT;
+    const mu = this.config.G * this.bodies[sunIdx]!.state.mass;
+    const sunP = positions[sunIdx]!;
+    const sunV = velocities[sunIdx]!;
+
+    for (let i = 0; i < this.bodies.length; i++) {
+      if (i === sunIdx || this.bodies[i]!.state.isSpacecraft) continue;
+      const rx = positions[i]!.x - sunP.x;
+      const ry = positions[i]!.y - sunP.y;
+      const rz = positions[i]!.z - sunP.z;
+      const vx = velocities[i]!.x - sunV.x;
+      const vy = velocities[i]!.y - sunV.y;
+      const vz = velocities[i]!.z - sunV.z;
+      const r2 = rx * rx + ry * ry + rz * rz;
+      const r = Math.sqrt(r2);
+      if (r < 1) continue;
+      const k = mu / (c2 * r2 * r);
+      const rDotV = rx * vx + ry * vy + rz * vz;
+      const term1 = 4 * mu / r - (vx * vx + vy * vy + vz * vz);
+      acc[i]!.x += k * (term1 * rx + 4 * rDotV * vx);
+      acc[i]!.y += k * (term1 * ry + 4 * rDotV * vy);
+      acc[i]!.z += k * (term1 * rz + 4 * rDotV * vz);
+    }
   }
 
   private _computeAccelerationsBrute(positions: THREE.Vector3[]): THREE.Vector3[] {

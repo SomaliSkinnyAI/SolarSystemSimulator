@@ -4,6 +4,32 @@ export const G_REAL = 6.674e-11;        // m³ kg⁻¹ s⁻²
 export const G_EXAGGERATED = 6.674e-9;  // 100× — makes orbits visually faster at 1× time scale
 export const AU = 1.496e11;             // metres per Astronomical Unit
 export const SOLAR_MASS = 1.989e30;     // kg
+export const SPEED_OF_LIGHT = 299792458; // m/s
+
+/**
+ * Distance of the collinear Lagrange points L1/L2 from the SECONDARY, as a
+ * fraction γ of the primary–secondary separation. Solves the Euler quintic
+ * by Newton iteration seeded with the Hill-radius estimate (μ/3)^(1/3).
+ * μ = m2/(m1+m2).
+ */
+export function collinearLagrangeGamma(mu: number, which: 'L1' | 'L2'): number {
+  let g = Math.cbrt(mu / 3);
+  for (let i = 0; i < 30; i++) {
+    let f: number;
+    let df: number;
+    if (which === 'L1') {
+      f = g ** 5 - (3 - mu) * g ** 4 + (3 - 2 * mu) * g ** 3 - mu * g ** 2 + 2 * mu * g - mu;
+      df = 5 * g ** 4 - 4 * (3 - mu) * g ** 3 + 3 * (3 - 2 * mu) * g ** 2 - 2 * mu * g + 2 * mu;
+    } else {
+      f = g ** 5 + (3 - mu) * g ** 4 + (3 - 2 * mu) * g ** 3 - mu * g ** 2 - 2 * mu * g - mu;
+      df = 5 * g ** 4 + 4 * (3 - mu) * g ** 3 + 3 * (3 - 2 * mu) * g ** 2 - 2 * mu * g - 2 * mu;
+    }
+    const step = f / df;
+    g -= step;
+    if (Math.abs(step) < 1e-14) break;
+  }
+  return g;
+}
 
 // ---------------------------------------------------------------------------
 // Orbital mechanics

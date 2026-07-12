@@ -37,6 +37,7 @@ export interface SimulationConfig {
   timeStep: number;       // fixed physics step in seconds (3600 = 1 hour)
   timeScale: number;      // multiplier: 1 = real time, 1e6 = 1M× faster
   integrator: Integrator;
+  relativity: boolean;      // 1PN solar term (Mercury's 43″/century precession)
   paused: boolean;
   gMode: 'realistic' | 'exaggerated';
   stepsPerFrameCap: number; // max physics steps per render frame

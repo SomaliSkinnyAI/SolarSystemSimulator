@@ -37,6 +37,8 @@ export class UIManager {
   onRealTimeToggle?: (enabled: boolean) => void;
   onGodModeToggle?: (active: boolean) => void;
   onMuteToggle?: () => void;
+  /** Fired when the user changes physics itself (G, relativity, sliders). */
+  onPhysicsMutated?: () => void;
 
   // Discovery-mode fact rotation state
   private factEl!: HTMLElement;
@@ -66,6 +68,9 @@ export class UIManager {
     simTime: '',
     simDate: '',
     overloaded: false,
+    energyDrift: 0,   // ppm
+    angMomDrift: 0,   // ppm
+    comDrift: 0,      // km
   };
 
   // Monitor binding handles for refresh
@@ -175,6 +180,7 @@ export class UIManager {
       for (const b of this.getBodies()) {
         b.state.velocity.multiplyScalar(ratio);
       }
+      this.onPhysicsMutated?.();
     });
 
     page.addBinding(this.simConfig, 'integrator', {
@@ -183,6 +189,9 @@ export class UIManager {
     }).on('change', (ev: { value: string }) => {
       this.simConfig.integrator = ev.value as 'RK4' | 'Verlet';
     });
+
+    page.addBinding(this.simConfig, 'relativity', { label: 'Relativity (1PN)' })
+      .on('change', () => this.onPhysicsMutated?.());
 
     page.addBlade({ view: 'separator' });
 
@@ -378,6 +387,14 @@ export class UIManager {
       page.addBinding(this.info, 'simTime',     { label: 'Sim Time', readonly: true }),
       page.addBinding(this.info, 'simDate',     { label: 'Date',     readonly: true }),
       page.addBinding(this.info, 'overloaded',  { label: '⚠ Overld', readonly: true }),
+    );
+
+    page.addBlade({ view: 'separator' });
+
+    this.infoBindings.push(
+      page.addBinding(this.info, 'energyDrift', { label: 'ΔE (ppm)',  readonly: true, step: 0.01, format: this.fixed2Format }),
+      page.addBinding(this.info, 'angMomDrift', { label: 'ΔL (ppm)',  readonly: true, step: 0.01, format: this.fixed2Format }),
+      page.addBinding(this.info, 'comDrift',    { label: 'COM (km)',  readonly: true, step: 1, format: this.intFormat }),
     );
 
     page.addBlade({ view: 'separator' });
@@ -671,6 +688,13 @@ export class UIManager {
     link.href     = this.sceneManager.captureScreenshot(2);
     link.download = 'solar-system-photo.png';
     link.click();
+  }
+
+  /** Integrator-quality readouts (updated at low cadence by main.ts). */
+  setConservation(energyPpm: number, angMomPpm: number, comKm: number): void {
+    this.info.energyDrift = energyPpm;
+    this.info.angMomDrift = angMomPpm;
+    this.info.comDrift = comKm;
   }
 
   /** Sync the Real-Time checkbox state (e.g. after a date jump) */

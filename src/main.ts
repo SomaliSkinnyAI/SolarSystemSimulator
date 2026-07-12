@@ -7,6 +7,7 @@ import { computeBodiesForDate, formatSimDate } from './data/realTimeOrbits';
 import { computeBodiesFromHorizonsCache, getSpacecraftSampler, getAvailableSpacecraft, dateToJulianTDB, SampledState } from './data/horizonsEphemeris';
 import { SPACECRAFT, makeSpacecraftState } from './data/spacecraft';
 import { scanSystemEvents } from './utils/EventPredictor';
+import { measureConservation, driftFrom, ConservationSample } from './utils/ConservationMonitor';
 import { CelestialBody } from './physics/CelestialBody';
 import { selectOccluders, updateEclipseUniforms } from './rendering/EclipseShadows';
 import { CometTail } from './rendering/CometTail';
@@ -34,6 +35,7 @@ const simConfig: SimulationConfig = {
   timeStep: 3600,          // 1 hour per physics step
   timeScale: 50000,         // start at 50 000× (Mercury orbit ≈ 2.5 min, Earth ≈ 10 min)
   integrator: 'RK4',
+  relativity: true,
   paused: false,
   gMode: 'realistic',
   stepsPerFrameCap: 300,
@@ -120,6 +122,7 @@ function onBodyGone(id: string): void {
   }
   bodies = physics.bodies; // sync reference
   ui.update(simTimeElapsed, bodies);
+  rebaseConservation();
 }
 
 physics.onBodyRemoved = onBodyGone;
@@ -202,6 +205,7 @@ spawnPanel.onSpawn = (req) => {
   // Spawned bodies get a predicted orbit ring like everyone else
   sceneManager.clearOrbitRings();
   sceneManager.buildOrbitRings(bodies, renderConfig.realScale);
+  rebaseConservation();
 };
 
 // ---------------------------------------------------------------------------
@@ -231,6 +235,7 @@ const ui = new UIManager(
 ui.onGodModeToggle = (active) => {
   if (!active) spawnPanel.close();
 };
+ui.onPhysicsMutated = () => rebaseConservation();
 
 // ---------------------------------------------------------------------------
 // Date overlay (persistent date display + date picker)
@@ -310,6 +315,7 @@ function rebuildSimulationFromStates(states: ReturnType<typeof computeBodiesForD
   trailLastPos.clear();
   sceneManager.buildOrbitRings(bodies, renderConfig.realScale);
   buildAllLabels();
+  rebaseConservation();
 }
 
 function escapeHtml(text: string): string {
@@ -320,6 +326,13 @@ function escapeHtml(text: string): string {
     '"': '&quot;',
     "'": '&#039;',
   }[ch] ?? ch));
+}
+
+// --- Conservation baseline (rebased whenever physics itself changes) ---
+let consBaseline: ConservationSample | null = null;
+
+function rebaseConservation(): void {
+  consBaseline = measureConservation(bodies.map(b => b.state), simConfig.G);
 }
 
 function updateEventPanel(): void {
@@ -438,6 +451,7 @@ async function applyDateInPlace(date: Date): Promise<void> {
       realTimeMode = true;
       trailRenderer.clearAll();
       trailLastPos.clear();
+      rebaseConservation();
     } else {
       rebuildSimulationFromStates(result.states, date, true);
     }
@@ -555,6 +569,36 @@ tour.onSelectBody = (b) => {
 };
 transportBar.onTour = () => (tour.active ? tour.stop() : tour.start());
 
+/**
+ * Drop a small asteroid at the exact Sun–<secondary> L4/L5 point with the
+ * local circular co-rotation velocity: under the real N-body forces it then
+ * visibly librates in a tadpole orbit — why Jupiter's Trojans exist.
+ */
+function spawnAtLagrange(secondary: CelestialBody, sign: 1 | -1): void {
+  const sunBody = bodies.find(b => b.state.id === 'sun');
+  if (!sunBody) return;
+  const p1 = sunBody.state.position;
+  const v1 = sunBody.state.velocity;
+  const rel = new THREE.Vector3().subVectors(secondary.state.position, p1);
+  const relV = new THREE.Vector3().subVectors(secondary.state.velocity, v1);
+  const R = rel.length();
+  if (R < 1) return;
+  const normal = new THREE.Vector3().crossVectors(rel, relV).normalize();
+  const pos = rel.clone().applyAxisAngle(normal, sign * Math.PI / 3).add(p1);
+  // ω = (r × v)/r²; v_L = ω × r_L  (exact co-rotation)
+  const omega = new THREE.Vector3().crossVectors(rel, relV).divideScalar(R * R);
+  const vel = new THREE.Vector3().crossVectors(omega, pos.clone().sub(p1)).add(v1);
+  spawnPanel.onSpawn?.({
+    name: `${secondary.state.name} ${sign > 0 ? 'L4' : 'L5'} Trojan`,
+    mass: 5e15,
+    radius: 5e4,
+    position: pos,
+    velocity: vel,
+    color: 0xB8A888,
+    isEmissive: false,
+  });
+}
+
 const palette = new CommandPalette();
 palette.getItems = (): PaletteItem[] => [
   ...bodies.map(b => ({
@@ -576,6 +620,14 @@ palette.getItems = (): PaletteItem[] => [
   { label: 'Scan upcoming events', kind: 'action', run: () => void eventsPanel.scan() },
   { label: 'Reset simulation', kind: 'action', run: () => ui.onReset?.() },
   { label: 'Copy shareable link', kind: 'action', run: copyShareLink },
+  ...((): PaletteItem[] => {
+    const sel = bodySelector.selectedBody;
+    if (!sel || sel.state.id === 'sun' || sel.state.isMoon || sel.state.isSpacecraft) return [];
+    return [
+      { label: `Drop Trojan at Sun–${sel.state.name} L4`, kind: 'action', run: () => spawnAtLagrange(sel, 1) },
+      { label: `Drop Trojan at Sun–${sel.state.name} L5`, kind: 'action', run: () => spawnAtLagrange(sel, -1) },
+    ];
+  })(),
 ];
 
 // Boot: a share link's encoded moment wins; otherwise open at the real
@@ -840,7 +892,7 @@ function animate(): void {
   // --- Lagrange points ---
   if (renderConfig.showLagrangePoints) {
     const selected = bodySelector.selectedBody;
-    sceneManager.updateLagrangePoints(sun, selected);
+    sceneManager.updateLagrangePoints(sun, selected, renderConfig.logScale, lerpT);
   } else {
     sceneManager.updateLagrangePoints(null, null);
   }
@@ -879,6 +931,11 @@ function animate(): void {
   if (eventPanelTimer >= 0.5) {
     eventPanelTimer = 0;
     updateEventPanel();
+    if (!consBaseline) rebaseConservation();
+    else {
+      const drift = driftFrom(consBaseline, measureConservation(bodies.map(b => b.state), simConfig.G));
+      ui.setConservation(drift.energyPpm, drift.angMomPpm, drift.comDriftKm);
+    }
   }
 
   // --- UI refresh ---
