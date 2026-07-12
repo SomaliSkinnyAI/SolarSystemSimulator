@@ -131,10 +131,7 @@ physics.onBodyMerged = (survivorId) => {
   audio.mergeBoom(survivor?.state.mass ?? 1e20);
 };
 
-// ---------------------------------------------------------------------------
-// Build asteroid belt (after scene is set up)
-// ---------------------------------------------------------------------------
-sceneManager.buildAsteroidBelt();
+// (Asteroid swarm loads asynchronously inside SceneManager)
 
 // ---------------------------------------------------------------------------
 // Body selector (raycasting + God Mode)
@@ -862,8 +859,8 @@ function animate(): void {
     sceneManager.updateSolarWind(wallDt);
   }
 
-  // --- Asteroid belt orbital clock ---
-  sceneManager.updateAsteroidBelt(simTimeElapsed);
+  // --- Asteroid swarm orbital clock (real elements, real dates) ---
+  sceneManager.updateAsteroidSwarm(dateToJulianTDB(simDate));
 
   // --- Comet tails (Halley) ---
   {

@@ -11,6 +11,7 @@ import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRe
 import { CelestialBody } from '../physics/CelestialBody';
 import { StarField } from './StarField';
 import { CameraDirector } from './CameraDirector';
+import { AsteroidSwarm } from './AsteroidSwarm';
 import { RenderConfig, CameraConfig } from '../types';
 import { AU, randRange, collinearLagrangeGamma } from '../utils/MathUtils';
 import { DISPLAY_SCALE, physicsToScene } from '../utils/CoordinateSystem';
@@ -229,9 +230,8 @@ export class SceneManager {
   private labelRenderer: CSS2DRenderer;
   private labels: Map<string, CSS2DObject> = new Map();
 
-  // Asteroid belt
-  private asteroidMesh: THREE.InstancedMesh | null = null;
-  private beltTimeUniform = { value: 0 };
+  // Real asteroid swarm (60k numbered asteroids, GPU-propagated)
+  private asteroidSwarm!: AsteroidSwarm;
 
   // Solar wind
   private swPositions: Float32Array;
@@ -337,6 +337,10 @@ export class SceneManager {
     this.starField = new StarField();
     this.starField.addToScene(this.scene);
 
+    // Asteroid swarm (loads its element table asynchronously)
+    this.asteroidSwarm = new AsteroidSwarm(this.scene);
+    void this.asteroidSwarm.load().then(() => this.applyRenderConfig(renderConfig));
+
     // Post-processing. The default EffectComposer target is non-multisampled,
     // which silently discards the canvas's antialias flag — pass an explicit
     // MSAA half-float target so edges stay smooth and bloom works in HDR.
@@ -404,107 +408,9 @@ export class SceneManager {
   // ---------------------------------------------------------------------------
   // Asteroid belt — InstancedMesh, visual only
   // ---------------------------------------------------------------------------
-  /**
-   * Living asteroid belt: every rock orbits at its true Keplerian rate, on
-   * the GPU. Instances are placed at phase 0 along +X; the vertex shader
-   * rotates each by (phase0 + k·uBaseAng), where k is the rock's mean motion
-   * quantized to integer multiples of ω0 = 2π/600yr. main.ts feeds
-   * uBaseAng = (ω0·simTime) mod 2π (computed in double precision), so shader
-   * angles stay small and exact at any simulation time — inner rocks visibly
-   * lap outer ones under time-warp, and the Kirkwood gaps persist.
-   */
-  buildAsteroidBelt(): void {
-    if (this.asteroidMesh) {
-      this.scene.remove(this.asteroidMesh);
-      this.asteroidMesh.geometry.dispose();
-      (this.asteroidMesh.material as THREE.Material).dispose();
-    }
-    const geo = new THREE.SphereGeometry(0.007, 5, 4);
-    const mat = new THREE.MeshStandardMaterial({
-      color: 0xffffff,
-      roughness: 0.96,
-      metalness: 0.08,
-      vertexColors: true,
-    });
-
-    const count = 9000;
-    const orbit = new Float32Array(count * 4); // r, phase0, k, yAmp
-    const GM_SUN = 6.674e-11 * 1.989e30;
-
-    mat.onBeforeCompile = (shader) => {
-      shader.uniforms['uBaseAng'] = this.beltTimeUniform;
-      shader.vertexShader = shader.vertexShader
-        .replace('#include <common>',
-          '#include <common>\nattribute vec4 aOrbit;\nuniform float uBaseAng;')
-        .replace('#include <project_vertex>', /* glsl */`
-          vec4 mvPosition = vec4( transformed, 1.0 );
-          #ifdef USE_INSTANCING
-            mvPosition = instanceMatrix * mvPosition;
-            float beltAng = aOrbit.y + aOrbit.z * uBaseAng;
-            float bc = cos(beltAng), bs = sin(beltAng);
-            mvPosition.xz = mat2(bc, -bs, bs, bc) * mvPosition.xz;
-            mvPosition.y += aOrbit.w * sin(beltAng * 1.7 + aOrbit.y * 3.0);
-          #endif
-          mvPosition = modelViewMatrix * mvPosition;
-          gl_Position = projectionMatrix * mvPosition;
-        `);
-    };
-
-    this.asteroidMesh = new THREE.InstancedMesh(geo, mat, count);
-    this.asteroidMesh.castShadow = false;
-    this.asteroidMesh.frustumCulled = false;
-
-    const matrix = new THREE.Matrix4();
-    const quat   = new THREE.Quaternion();
-    const color  = new THREE.Color();
-    for (let i = 0; i < count; i++) {
-      const phase0 = Math.random() * Math.PI * 2;
-      const eccentricity = randRange(0.0, 0.22);
-      let semiMajorAxisAU = 2.05 + Math.pow(Math.random(), 0.72) * 1.35;
-      if (Math.abs(semiMajorAxisAU - 2.50) < 0.035) semiMajorAxisAU += 0.055;
-      if (Math.abs(semiMajorAxisAU - 2.82) < 0.040) semiMajorAxisAU -= 0.060;
-      const orbitR = semiMajorAxisAU * (1 - eccentricity * eccentricity)
-                   / (1 + eccentricity * Math.cos(phase0));
-      const r = (orbitR * AU) / DISPLAY_SCALE;
-      const inc = randRange(-0.13, 0.13);
-      const scale = Math.pow(Math.random(), 2.4) * 2.2 + 0.25;
-      quat.setFromEuler(new THREE.Euler(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI));
-      // Rock sits at phase 0 (+X); the shader applies the orbital angle
-      matrix.compose(
-        new THREE.Vector3(r, 0, 0),
-        quat,
-        new THREE.Vector3(scale, scale, scale)
-      );
-      this.asteroidMesh.setMatrixAt(i, matrix);
-
-      // True mean motion for this semi-major axis, quantized to k·ω0
-      const aMetres = semiMajorAxisAU * AU;
-      const n = Math.sqrt(GM_SUN / (aMetres * aMetres * aMetres));
-      const k = Math.max(1, Math.round(n / SceneManager.BELT_OMEGA0));
-      orbit[i * 4]     = r;
-      orbit[i * 4 + 1] = phase0;
-      orbit[i * 4 + 2] = k;
-      orbit[i * 4 + 3] = Math.sin(inc) * r;
-
-      const metallic = Math.random();
-      if (metallic > 0.88) color.setRGB(0.62, 0.58, 0.50);
-      else if (metallic > 0.62) color.setRGB(0.46, 0.42, 0.36);
-      else color.setRGB(0.30, 0.29, 0.26);
-      this.asteroidMesh.setColorAt(i, color);
-    }
-    geo.setAttribute('aOrbit', new THREE.InstancedBufferAttribute(orbit, 4));
-    this.asteroidMesh.instanceMatrix.needsUpdate = true;
-    if (this.asteroidMesh.instanceColor) this.asteroidMesh.instanceColor.needsUpdate = true;
-    this.scene.add(this.asteroidMesh);
-  }
-
-  /** ω0 for belt mean-motion quantization: 2π / 600 years. */
-  private static readonly BELT_OMEGA0 = (2 * Math.PI) / (600 * 3.15576e7);
-
-  /** Advance the belt's shared orbital clock (double-precision mod on CPU). */
-  updateAsteroidBelt(simTimeSeconds: number): void {
-    this.beltTimeUniform.value =
-      (SceneManager.BELT_OMEGA0 * simTimeSeconds) % (2 * Math.PI);
+  /** Advance the asteroid swarm's orbital clock to the sim's Julian date. */
+  updateAsteroidSwarm(jdTDB: number): void {
+    this.asteroidSwarm.setTime(jdTDB);
   }
 
   // ---------------------------------------------------------------------------
@@ -810,9 +716,8 @@ export class SceneManager {
     this.renderer.toneMappingExposure = cfg.exposure;
     this.lensflare.visible = cfg.showLensflare;
     this.godraysEnabled = cfg.showGodRays;
-    // Belt geometry lives in linear scene coordinates — hide it in log mode
-    // where the whole system compresses to ~2.5 units
-    if (this.asteroidMesh) this.asteroidMesh.visible = cfg.showAsteroidBelt && !cfg.logScale;
+    // Swarm positions live in linear scene coordinates — hide in log mode
+    this.asteroidSwarm.setVisible(cfg.showAsteroidBelt && !cfg.logScale);
     if (this.swMesh)        this.swMesh.visible       = cfg.showSolarWind;
     if (this.gravFieldMesh) this.gravFieldMesh.visible = cfg.showGravityField;
     this.lagrangeSprites.forEach(s => {
