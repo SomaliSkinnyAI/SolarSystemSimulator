@@ -611,7 +611,7 @@ export class UIManager {
       }
     }
 
-    if (sun && earth && s.id !== 'sun' && s.id !== 'earth' && !s.isMoon) {
+    if (sun && earth && s.id !== 'sun' && s.id !== 'earth' && !s.isMoon && !s.isSpacecraft) {
       const transfer = estimateHohmannTransfer(sun.state, earth.state, s, G_REAL);
       if (transfer) {
         rows.push(

@@ -435,7 +435,9 @@ export class CelestialBody {
   ) {
     this.state = state;
     this.scene = scene;
-    this.visualRadius = visualRadius(state.radius, state.isEmissive);
+    this.visualRadius = state.isSpacecraft
+      ? 0.06 // metres-scale craft would vanish; fixed small scene size
+      : visualRadius(state.radius, state.isEmissive);
 
     this.group = new THREE.Group();
     this.tiltGroup = new THREE.Group();
@@ -469,6 +471,37 @@ export class CelestialBody {
   // Mesh construction
   // ---------------------------------------------------------------------------
   private _buildMesh(tl: THREE.TextureLoader): THREE.Mesh {
+    if (this.state.isSpacecraft) {
+      // Spacecraft: small glinting octahedron + point glow, no textures
+      const geo = new THREE.OctahedronGeometry(this.visualRadius, 0);
+      const mat = new THREE.MeshStandardMaterial({
+        color: this.state.color,
+        emissive: new THREE.Color(this.state.color),
+        emissiveIntensity: 0.55,
+        roughness: 0.35,
+        metalness: 0.8,
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      const glowCanvas = document.createElement('canvas');
+      glowCanvas.width = glowCanvas.height = 32;
+      const ctx = glowCanvas.getContext('2d')!;
+      const g = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+      g.addColorStop(0, 'rgba(255,255,255,0.9)');
+      g.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, 32, 32);
+      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: new THREE.CanvasTexture(glowCanvas),
+        color: this.state.color,
+        transparent: true,
+        depthWrite: false,
+        opacity: 0.8,
+      }));
+      sprite.scale.setScalar(this.visualRadius * 3.5);
+      mesh.add(sprite);
+      return mesh;
+    }
+
     const geo = new THREE.SphereGeometry(this.visualRadius, 64, 32);
     let mat: THREE.Material;
 
@@ -761,6 +794,13 @@ export class CelestialBody {
    * the scale is 1.0 (unmodified physics-derived size).
    */
   private _updateGroupScale(lerpT: number, realScale: boolean = false): void {
+    if (this.state.isSpacecraft) {
+      // Always a small fixed marker regardless of scale mode — the physical
+      // craft would be sub-pixel at every zoom that shows a planet
+      const targetR = 0.28 + (0.004 - 0.28) * lerpT;
+      this.group.scale.setScalar(Math.max(1e-6, targetR / this.visualRadius));
+      return;
+    }
     if (realScale) {
       // True physical radius in scene units — no exaggeration
       const trueSceneR = this.state.radius / DISPLAY_SCALE;

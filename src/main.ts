@@ -4,7 +4,8 @@ import { cloneInitialBodies, nextBodyId } from './data/solarSystemData';
 import { G_REAL, G_EXAGGERATED } from './utils/MathUtils';
 import { DISPLAY_SCALE } from './utils/CoordinateSystem';
 import { computeBodiesForDate, formatSimDate } from './data/realTimeOrbits';
-import { computeBodiesFromHorizonsCache } from './data/horizonsEphemeris';
+import { computeBodiesFromHorizonsCache, getSpacecraftSampler, getAvailableSpacecraft, dateToJulianTDB, SampledState } from './data/horizonsEphemeris';
+import { SPACECRAFT, makeSpacecraftState } from './data/spacecraft';
 import { scanSystemEvents } from './utils/EventPredictor';
 import { CelestialBody } from './physics/CelestialBody';
 import { selectOccluders, updateEclipseUniforms } from './rendering/EclipseShadows';
@@ -286,6 +287,17 @@ async function statesForDate(targetDate: Date): Promise<{
 function rebuildSimulationFromStates(states: ReturnType<typeof computeBodiesForDate>, epoch: Date, useRealTime: boolean): void {
   disposeCurrentBodies();
   createBodiesFromStates(states, useRealTime ? epoch : undefined);
+
+  // Real spacecraft ride along in real-time mode, kinematically driven from
+  // their Horizons trajectories each frame (positioned at first update)
+  if (useRealTime) {
+    for (const spec of SPACECRAFT) {
+      const body = new CelestialBody(makeSpacecraftState(spec), textureLoader, scene);
+      body.group.visible = false; // shown once the sampler has coverage
+      bodies.push(body);
+    }
+  }
+
   physics = new PhysicsEngine(bodies, simConfig);
   attachPhysicsCallbacks();
 
@@ -410,11 +422,13 @@ async function applyDateInPlace(date: Date): Promise<void> {
   try {
     const result = await statesForDate(date);
     const byId = new Map(result.states.map(s => [s.id, s]));
-    const sameRoster = bodies.length === result.states.length
-      && bodies.every(b => byId.has(b.state.id));
+    // Spacecraft are kinematic extras — compare only the planet/moon roster
+    const roster = bodies.filter(b => !b.state.isSpacecraft);
+    const sameRoster = roster.length === result.states.length
+      && roster.every(b => byId.has(b.state.id));
     ephemerisSource = result.source;
     if (sameRoster) {
-      for (const b of bodies) {
+      for (const b of roster) {
         const s = byId.get(b.state.id)!;
         b.state.position.copy(s.position);
         b.state.velocity.copy(s.velocity);
@@ -639,6 +653,34 @@ let eclipseFrameCounter = 30;
 const cometTail = new CometTail(scene);
 const cometVelDir = new THREE.Vector3();
 
+// Spacecraft trajectory samplers (lazy-loaded from the ephemeris cache)
+const spacecraftSamplers = new Map<string, (jd: number) => SampledState | null>();
+void (async () => {
+  const available = await getAvailableSpacecraft();
+  for (const id of available) {
+    const sampler = await getSpacecraftSampler(id);
+    if (sampler) spacecraftSamplers.set(id, sampler);
+  }
+})();
+
+/** Kinematic spacecraft update: overwrite state from ephemeris each frame. */
+function updateSpacecraft(): void {
+  if (!realTimeMode) return;
+  const jd = dateToJulianTDB(simDate);
+  for (const body of bodies) {
+    if (!body.state.isSpacecraft) continue;
+    const sampler = spacecraftSamplers.get(body.state.id);
+    const s = sampler ? sampler(jd) : null;
+    if (s) {
+      body.state.position.copy(s.position);
+      body.state.velocity.copy(s.velocity);
+      body.group.visible = true;
+    } else {
+      body.group.visible = false; // outside trajectory coverage
+    }
+  }
+}
+
 function animate(): void {
   requestAnimationFrame(animate);
 
@@ -653,6 +695,10 @@ function animate(): void {
     physics.step(wallDt);
     simTimeElapsed += wallDt * simConfig.timeScale;
   }
+
+  // --- Kinematic spacecraft (must run before scene-position updates) ---
+  simDate = new Date(simEpoch.getTime() + simTimeElapsed * 1000);
+  updateSpacecraft();
 
   // --- Scale lerp (smooth log ↔ linear transition) ---
   const lerpT = sceneManager.updateScaleLerp(renderConfig.logScale, wallDt);

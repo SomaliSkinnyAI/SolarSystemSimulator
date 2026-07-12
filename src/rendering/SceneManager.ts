@@ -1112,6 +1112,9 @@ export class SceneManager {
       const label = this.labels.get(body.state.id);
       if (!label) continue;
       label.position.copy(body.group.position);
+      // Hidden bodies (spacecraft outside trajectory coverage) hide labels
+      label.visible = body.group.visible;
+      if (!body.group.visible) continue;
 
       // Hide moon labels when camera is far from their parent
       if (body.state.isMoon && body.state.parentId) {

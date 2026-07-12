@@ -335,6 +335,9 @@ export class PhysicsEngine {
       for (let j = i + 1; j < n; j++) {
         const bi = this.bodies[i]!;
         const bj = this.bodies[j]!;
+        // Kinematic spacecraft never merge — their positions are overwritten
+        // from the ephemeris each frame (all five boot at the origin!)
+        if (bi.state.isSpacecraft || bj.state.isSpacecraft) continue;
         if (this.toRemove.has(bi.state.id) || this.toRemove.has(bj.state.id)) continue;
 
         const dx = bi.state.position.x - bj.state.position.x;

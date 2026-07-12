@@ -23,6 +23,7 @@ export interface BodyState {
   rotationPeriod?: number;  // sidereal rotation period in seconds (positive = prograde)
   axialTilt?: number;       // obliquity in radians
   tiltAxisAngle?: number;   // azimuthal angle of tilt axis in sim XZ plane (radians)
+  isSpacecraft?: boolean;   // kinematic: position driven by ephemeris, not RK4
 }
 
 // ---------------------------------------------------------------------------
