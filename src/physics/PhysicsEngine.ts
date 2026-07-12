@@ -236,6 +236,7 @@ export class PhysicsEngine {
   // Velocity Verlet integrator
   // ---------------------------------------------------------------------------
   private _stepVerlet(h: number): void {
+    POOL.reset();
     const n = this.bodies.length;
     const positions = this.bodies.map(b => b.state.position);
 
@@ -349,14 +350,14 @@ export class PhysicsEngine {
     }
 
     if (this.toRemove.size > 0) {
-      this.bodies = this.bodies.filter(b => {
-        if (this.toRemove.has(b.state.id)) {
-          b.dispose();
-          this.onBodyRemoved?.(b.state.id);
-          return false;
-        }
-        return true;
-      });
+      // Reassign this.bodies BEFORE firing callbacks so handlers reading
+      // physics.bodies see the post-removal array.
+      const removed = this.bodies.filter(b => this.toRemove.has(b.state.id));
+      this.bodies = this.bodies.filter(b => !this.toRemove.has(b.state.id));
+      for (const b of removed) {
+        b.dispose();
+        this.onBodyRemoved?.(b.state.id);
+      }
     }
   }
 

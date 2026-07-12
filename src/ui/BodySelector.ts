@@ -82,7 +82,9 @@ export class BodySelector {
       this.selectionRing.visible = false;
       return;
     }
-    const r = body.visualRadius * 1.55;
+    // Displayed radius = visualRadius × group scale (scale varies per frame
+    // with log/real-scale modes) — without it the ring hides inside the mesh.
+    const r = body.visualRadius * body.group.scale.x * 1.55;
     this.selectionRing.position.copy(body.group.position);
     this.selectionRing.scale.set(r, r, r);
     this.selectionRing.lookAt(this.camera.position);

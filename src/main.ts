@@ -89,15 +89,27 @@ sceneManager.buildOrbitRings(bodies, renderConfig.realScale);
 // ---------------------------------------------------------------------------
 let physics = new PhysicsEngine(bodies, simConfig);
 
-physics.onBodyRemoved = (id) => {
+/**
+ * Central cleanup when a body leaves the simulation (delete or collision
+ * merge): trail, label, orbit ring, selection, camera focus, stale caches.
+ */
+function onBodyGone(id: string): void {
   trailRenderer.dispose(id);
+  trailLastPos.delete(id);
+  sceneManager.removeLabel(id);
+  sceneManager.removeOrbitRing(id);
+  if (bodySelector.selectedBody?.state.id === id) {
+    bodySelector.deselectBody();
+  }
+  if (cameraConfig.focusBodyId === id) {
+    cameraConfig.focusBodyId = null;
+    cameraConfig.focusMode = false;
+  }
   bodies = physics.bodies; // sync reference
   ui.update(simTimeElapsed, bodies);
-};
+}
 
-physics.onBodyMerged = (_survivor, removed) => {
-  trailRenderer.dispose(removed);
-};
+physics.onBodyRemoved = onBodyGone;
 
 // ---------------------------------------------------------------------------
 // Build asteroid belt (after scene is set up)
@@ -211,12 +223,7 @@ function disposeCurrentBodies(): void {
 }
 
 function attachPhysicsCallbacks(): void {
-  physics.onBodyRemoved = (id) => {
-    trailRenderer.dispose(id);
-    bodies = physics.bodies;
-    ui.update(simTimeElapsed, bodies);
-  };
-  physics.onBodyMerged = (_s, removed) => trailRenderer.dispose(removed);
+  physics.onBodyRemoved = onBodyGone;
 }
 
 function createBodiesFromStates(states: ReturnType<typeof computeBodiesForDate>, rotationDate?: Date): void {
@@ -321,9 +328,7 @@ ui.onReset = () => {
 };
 
 ui.onDeleteBody = (id) => {
-  physics.removeBody(id);
-  trailRenderer.dispose(id);
-  bodies = physics.bodies;
+  physics.removeBody(id); // fires onBodyRemoved → onBodyGone cleanup
 };
 
 ui.onRealTimeToggle = async (enabled) => {
@@ -414,7 +419,7 @@ function animate(): void {
   for (const body of bodies) {
     body.updateScenePosition(renderConfig.logScale, lerpT, renderConfig.realScale);
     body.setAtmosphereVisible(renderConfig.showAtmospheres);
-    body.rotateBody(wallDt, simConfig.timeScale);
+    if (!simConfig.paused) body.rotateBody(wallDt, simConfig.timeScale);
   }
 
   // --- Moon positioning (second pass — needs parent already updated) ---

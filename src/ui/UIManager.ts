@@ -148,8 +148,19 @@ export class UIManager {
       label: 'Gravity',
       options: { Realistic: 'realistic', Exaggerated: 'exaggerated' },
     }).on('change', (ev: { value: string }) => {
+      const oldG = this.simConfig.G;
+      const newG = ev.value === 'realistic' ? G_REAL : G_EXAGGERATED;
+      if (newG === oldG) return;
       this.simConfig.gMode = ev.value as 'realistic' | 'exaggerated';
-      this.simConfig.G = ev.value === 'realistic' ? G_REAL : G_EXAGGERATED;
+      this.simConfig.G = newG;
+      // Rescale all velocities by sqrt(G ratio): orbits keep their exact shape
+      // (a and e are invariant under G→kG, v→√k·v) but run √k× faster — the
+      // intended "visually faster orbits" effect. Without this, boosting G
+      // makes every body plunge sunward on a collapsing ellipse.
+      const ratio = Math.sqrt(newG / oldG);
+      for (const b of this.getBodies()) {
+        b.state.velocity.multiplyScalar(ratio);
+      }
     });
 
     page.addBinding(this.simConfig, 'integrator', {
@@ -318,6 +329,10 @@ export class UIManager {
     page.addBlade({ view: 'separator' });
 
     page.addButton({ title: '📷 Screenshot' }).on('click', () => {
+      // Render synchronously first: without preserveDrawingBuffer the WebGL
+      // buffer is cleared after present, so capturing outside a fresh render
+      // yields a black image.
+      this.sceneManager.render();
       const link = document.createElement('a');
       link.href     = this.sceneManager.renderer.domElement.toDataURL('image/png');
       link.download = 'solar-system.png';
@@ -355,7 +370,11 @@ export class UIManager {
   // ---------------------------------------------------------------------------
   private _buildKeyboard(): void {
     window.addEventListener('keydown', (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement).tagName === 'INPUT') return;
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+      // Never hijack browser shortcuts (Ctrl+R reload, Ctrl+F find, ...)
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.repeat) return;
       switch (e.key) {
         case ' ':
           e.preventDefault();

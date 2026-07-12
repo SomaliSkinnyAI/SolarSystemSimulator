@@ -550,10 +550,19 @@ export class CelestialBody {
     this.group.traverse(obj => {
       if (obj instanceof THREE.Mesh) {
         obj.geometry.dispose();
-        if (Array.isArray(obj.material)) {
-          obj.material.forEach(m => m.dispose());
-        } else {
-          (obj.material as THREE.Material).dispose();
+        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+        for (const m of mats) {
+          // material.dispose() does NOT free textures — walk .map and shader
+          // uniforms explicitly or every rebuild leaks GPU memory. Textures
+          // are per-body (THREE.Cache is off), so disposing here is safe.
+          const withMap = m as THREE.Material & { map?: THREE.Texture | null };
+          if (withMap.map) withMap.map.dispose();
+          if (m instanceof THREE.ShaderMaterial) {
+            for (const u of Object.values(m.uniforms)) {
+              if (u.value instanceof THREE.Texture) u.value.dispose();
+            }
+          }
+          m.dispose();
         }
       }
     });

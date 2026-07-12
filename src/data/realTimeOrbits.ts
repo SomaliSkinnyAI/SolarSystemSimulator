@@ -4,8 +4,12 @@ import { G_REAL, AU, SOLAR_MASS, circularOrbitVelocity } from '../utils/MathUtil
 
 // ---------------------------------------------------------------------------
 // NASA JPL Keplerian Elements for approximate planet positions
-// Source: https://ssd.jpl.nasa.gov/planets/approx_pos.html (Table 2a/2b)
-// Valid: 3000 BC – 3000 AD (inner planets), 1800–2050 AD (outer, with corrections)
+// Source: https://ssd.jpl.nasa.gov/planets/approx_pos.html (Table 1)
+// Valid: 1800–2050 AD. Table 1 is used WITHOUT the b/c/s/f correction terms —
+// those belong exclusively to the Table 2a element set (3000 BC – 3000 AD);
+// mixing them with Table 1 corrupts outer-planet mean anomalies by ~1°.
+// Outside 1800–2050 positions degrade gracefully (this is the approximate
+// fallback path; the Horizons cache is the accurate source).
 // ---------------------------------------------------------------------------
 
 const DEG2RAD = Math.PI / 180;
@@ -17,8 +21,6 @@ interface OrbitalElements {
   L0: number; LDot: number;         // mean longitude (deg) and rate (deg/cy)
   wBar0: number; wBarDot: number;   // longitude of perihelion (deg) and rate
   Omega0: number; OmegaDot: number; // longitude of ascending node (deg) and rate
-  // Extra correction terms for outer planets (Table 2b)
-  b?: number; c?: number; s?: number; f?: number;
 }
 
 const ELEMENTS: Record<string, OrbitalElements> = {
@@ -26,10 +28,10 @@ const ELEMENTS: Record<string, OrbitalElements> = {
   venus:   { a0: 0.72333566, aDot: 0.00000390, e0: 0.00677672, eDot: -0.00004107, I0: 3.39467605, IDot: -0.00078890, L0: 181.97909950, LDot: 58517.81538729, wBar0: 131.60246718, wBarDot: 0.00268329, Omega0: 76.67984255, OmegaDot: -0.27769418 },
   earth:   { a0: 1.00000261, aDot: 0.00000562, e0: 0.01671123, eDot: -0.00004392, I0: -0.00001531, IDot: -0.01294668, L0: 100.46457166, LDot: 35999.37244981, wBar0: 102.93768193, wBarDot: 0.32327364, Omega0: 0.0, OmegaDot: 0.0 },
   mars:    { a0: 1.52371034, aDot: 0.00001847, e0: 0.09339410, eDot: 0.00007882, I0: 1.84969142, IDot: -0.00813131, L0: -4.55343205, LDot: 19140.30268499, wBar0: -23.94362959, wBarDot: 0.44441088, Omega0: 49.55953891, OmegaDot: -0.29257343 },
-  jupiter: { a0: 5.20288700, aDot: -0.00011607, e0: 0.04838624, eDot: -0.00013253, I0: 1.30439695, IDot: -0.00183714, L0: 34.39644051, LDot: 3034.74612775, wBar0: 14.72847983, wBarDot: 0.21252668, Omega0: 100.47390909, OmegaDot: 0.20469106, b: -0.00012452, c: 0.06064060, s: -0.35635438, f: 38.35125000 },
-  saturn:  { a0: 9.53667594, aDot: -0.00125060, e0: 0.05386179, eDot: -0.00050991, I0: 2.48599187, IDot: 0.00193609, L0: 49.95424423, LDot: 1222.49362201, wBar0: 92.59887831, wBarDot: -0.41897216, Omega0: 113.66242448, OmegaDot: -0.28867794, b: 0.00025899, c: -0.13434469, s: 0.87320147, f: 38.35125000 },
-  uranus:  { a0: 19.18916464, aDot: -0.00196176, e0: 0.04725744, eDot: -0.00004397, I0: 0.77263783, IDot: -0.00242939, L0: 313.23810451, LDot: 428.48202785, wBar0: 170.95427630, wBarDot: 0.40805281, Omega0: 74.01692503, OmegaDot: 0.04240589, b: 0.00058331, c: -0.97731848, s: 0.17689245, f: 7.67025000 },
-  neptune: { a0: 30.06992276, aDot: 0.00026291, e0: 0.00859048, eDot: 0.00005105, I0: 1.77004347, IDot: 0.00035372, L0: -55.12002969, LDot: 218.45945325, wBar0: 44.96476227, wBarDot: -0.32241464, Omega0: 131.78422574, OmegaDot: -0.00508664, b: -0.00041348, c: 0.68346318, s: -0.10162547, f: 7.67025000 },
+  jupiter: { a0: 5.20288700, aDot: -0.00011607, e0: 0.04838624, eDot: -0.00013253, I0: 1.30439695, IDot: -0.00183714, L0: 34.39644051, LDot: 3034.74612775, wBar0: 14.72847983, wBarDot: 0.21252668, Omega0: 100.47390909, OmegaDot: 0.20469106 },
+  saturn:  { a0: 9.53667594, aDot: -0.00125060, e0: 0.05386179, eDot: -0.00050991, I0: 2.48599187, IDot: 0.00193609, L0: 49.95424423, LDot: 1222.49362201, wBar0: 92.59887831, wBarDot: -0.41897216, Omega0: 113.66242448, OmegaDot: -0.28867794 },
+  uranus:  { a0: 19.18916464, aDot: -0.00196176, e0: 0.04725744, eDot: -0.00004397, I0: 0.77263783, IDot: -0.00242939, L0: 313.23810451, LDot: 428.48202785, wBar0: 170.95427630, wBarDot: 0.40805281, Omega0: 74.01692503, OmegaDot: 0.04240589 },
+  neptune: { a0: 30.06992276, aDot: 0.00026291, e0: 0.00859048, eDot: 0.00005105, I0: 1.77004347, IDot: 0.00035372, L0: -55.12002969, LDot: 218.45945325, wBar0: 44.96476227, wBarDot: -0.32241464, Omega0: 131.78422574, OmegaDot: -0.00508664 },
 };
 
 // ---------------------------------------------------------------------------
@@ -44,8 +46,10 @@ function dateToJD(date: Date): number {
   const a = Math.floor((14 - m) / 12);
   const yy = y + 4800 - a;
   const mm = m + 12 * a - 3;
+  // Noon-based JDN formula: subtract 0.5 so midnight UTC maps to JD ×××××.5
+  // (omitting this shifted every element evaluation +12 hours).
   return d + Math.floor((153 * mm + 2) / 5) + 365 * yy
-    + Math.floor(yy / 4) - Math.floor(yy / 100) + Math.floor(yy / 400) - 32045;
+    + Math.floor(yy / 4) - Math.floor(yy / 100) + Math.floor(yy / 400) - 32045 - 0.5;
 }
 
 function centuriesSinceJ2000(date: Date): number {
@@ -85,12 +89,8 @@ function computeHeliocentricState(
   // Argument of perihelion
   const omega = (wBar - el.Omega0 - el.OmegaDot * T) * DEG2RAD;
 
-  // Mean anomaly (with correction terms for outer planets)
+  // Mean anomaly (Table 1 elements need no correction terms)
   let M = (L - wBar) * DEG2RAD;
-  if (el.b !== undefined) {
-    const ft = el.f! * T;
-    M += (el.b! * T * T + el.c! * Math.cos(ft * DEG2RAD) + el.s! * Math.sin(ft * DEG2RAD)) * DEG2RAD;
-  }
   // Normalize to [-pi, pi]
   M = ((M % (2 * Math.PI)) + 3 * Math.PI) % (2 * Math.PI) - Math.PI;
 

@@ -747,6 +747,20 @@ export class SceneManager {
     return true;
   }
 
+  /** Remove and dispose a single body's orbit ring (body deleted or merged). */
+  removeOrbitRing(id: string): void {
+    const ring = this.orbitRings.get(id);
+    if (!ring) return;
+    if (ring.isMoon && ring.parentGroup) {
+      ring.parentGroup.remove(ring.line);
+    } else {
+      this.scene.remove(ring.line);
+    }
+    ring.line.geometry.dispose();
+    (ring.line.material as THREE.Material).dispose();
+    this.orbitRings.delete(id);
+  }
+
   clearOrbitRings(): void {
     for (const [, ring] of this.orbitRings) {
       if (ring.isMoon && ring.parentGroup) {
@@ -822,6 +836,17 @@ export class SceneManager {
         }
       }
     }
+  }
+
+  /** Remove a single body's label (body deleted or merged). */
+  removeLabel(id: string): void {
+    const label = this.labels.get(id);
+    if (!label) return;
+    this.scene.remove(label);
+    if (label.element.parentNode) {
+      label.element.parentNode.removeChild(label.element);
+    }
+    this.labels.delete(id);
   }
 
   clearLabels(): void {

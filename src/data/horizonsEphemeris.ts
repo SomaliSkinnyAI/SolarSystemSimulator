@@ -34,10 +34,19 @@ function loadCache(): Promise<HorizonsCache | null> {
         if (!res.ok) return null;
         return await res.json() as HorizonsCache;
       })
-      .catch(() => null);
+      .catch(() => null)
+      .then(cache => {
+        // Don't memoize failures — a transient network error would otherwise
+        // silently disable Horizons mode until page reload.
+        if (!cache) cachePromise = null;
+        return cache;
+      });
   }
   return cachePromise;
 }
+
+/** TDB−UTC offset in days (~69.2 s in the 2020s; cache timestamps are JD_TDB). */
+const TDB_MINUS_UTC_DAYS = 69.184 / 86400;
 
 function dateToJD(date: Date): number {
   const y = date.getUTCFullYear();
@@ -48,8 +57,11 @@ function dateToJD(date: Date): number {
   const a = Math.floor((14 - m) / 12);
   const yy = y + 4800 - a;
   const mm = m + 12 * a - 3;
+  // The integer JDN formula is noon-based: subtract 0.5 so midnight UTC maps
+  // to JD ×××××.5 (omitting this shifted every lookup +12 hours).
   return d + Math.floor((153 * mm + 2) / 5) + 365 * yy
-    + Math.floor(yy / 4) - Math.floor(yy / 100) + Math.floor(yy / 400) - 32045;
+    + Math.floor(yy / 4) - Math.floor(yy / 100) + Math.floor(yy / 400) - 32045
+    - 0.5 + TDB_MINUS_UTC_DAYS;
 }
 
 function bracketSamples(samples: HorizonsSample[], jd: number): [HorizonsSample, HorizonsSample] | null {
