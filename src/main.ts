@@ -19,6 +19,7 @@ import { CommandPalette, PaletteItem } from './ui/CommandPalette';
 import { AudioManager } from './audio/AudioManager';
 import { UpcomingEvent } from './utils/EventPredictor';
 import { MissionPanel, MissionChoice } from './ui/MissionPanel';
+import { serializeSnapshot, deserializeSnapshot } from './state/SnapshotSerializer';
 import { PhysicsEngine } from './physics/PhysicsEngine';
 import { SceneManager } from './rendering/SceneManager';
 import { TrailRenderer } from './rendering/TrailRenderer';
@@ -596,6 +597,68 @@ function spawnAtLagrange(secondary: CelestialBody, sign: 1 | -1): void {
     isEmissive: false,
   });
 }
+
+// --- Save / load: export, import, and localStorage autosave ---
+const AUTOSAVE_KEY = 'sss-autosave';
+
+function currentSnapshotJson(): string {
+  return serializeSnapshot(
+    bodies.map(b => b.state), simConfig, renderConfig,
+    simEpoch, simTimeElapsed, realTimeMode
+  );
+}
+
+function restoreSnapshotJson(json: string): boolean {
+  const parsed = deserializeSnapshot(json);
+  if (!parsed) return false;
+  const { snapshot, states } = parsed;
+
+  disposeCurrentBodies();
+  createBodiesFromStates(states);
+  physics = new PhysicsEngine(bodies, simConfig);
+  attachPhysicsCallbacks();
+
+  Object.assign(simConfig, snapshot.simConfig);
+  Object.assign(renderConfig, snapshot.renderConfig);
+  sceneManager.applyRenderConfig(renderConfig);
+  simEpoch = new Date(snapshot.epochMs);
+  simTimeElapsed = snapshot.simTimeElapsed;
+  realTimeMode = snapshot.realTimeMode;
+
+  bodySelector.deselectBody();
+  trailRenderer.clearAll();
+  trailLastPos.clear();
+  sceneManager.buildOrbitRings(bodies, renderConfig.realScale);
+  buildAllLabels();
+  ui.setRealTimeEnabled(realTimeMode);
+  rebaseConservation();
+  return true;
+}
+
+ui.onExportState = () => {
+  const blob = new Blob([currentSnapshotJson()], { type: 'application/json' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = `solar-system-${simDate.toISOString().slice(0, 10)}.json`;
+  link.click();
+  URL.revokeObjectURL(link.href);
+};
+ui.onImportState = (json) => {
+  if (!restoreSnapshotJson(json)) {
+    console.warn('Import failed: not a valid snapshot file');
+  }
+};
+ui.onLoadAutosave = () => {
+  const saved = localStorage.getItem(AUTOSAVE_KEY);
+  if (saved) restoreSnapshotJson(saved);
+};
+
+// Autosave every 15 s (~60 KB; kinematic spacecraft re-sync on restore)
+setInterval(() => {
+  try {
+    localStorage.setItem(AUTOSAVE_KEY, currentSnapshotJson());
+  } catch { /* storage full or blocked — autosave is best-effort */ }
+}, 15_000);
 
 // --- Mission planner: porkchop plot + genuine N-body launch ---
 const missionPanel = new MissionPanel();

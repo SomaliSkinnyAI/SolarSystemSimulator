@@ -5,6 +5,14 @@ export default defineConfig({
   build: {
     target: 'esnext',
     outDir: 'dist',
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          three: ['three'],
+          tweakpane: ['tweakpane', '@tweakpane/core'],
+        },
+      },
+    },
   },
   optimizeDeps: {
     include: ['three', 'tweakpane'],

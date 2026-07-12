@@ -40,6 +40,9 @@ export class UIManager {
   /** Fired when the user changes physics itself (G, relativity, sliders). */
   onPhysicsMutated?: () => void;
   onPlanMission?: (targetId: string) => void;
+  onExportState?: () => void;
+  onImportState?: (json: string) => void;
+  onLoadAutosave?: () => void;
 
   private missionBtn!: HTMLButtonElement;
   private static readonly MISSION_TARGETS =
@@ -235,6 +238,22 @@ export class UIManager {
       this.bodySelector.setGodMode(nowActive);
       this.onGodModeToggle?.(nowActive);
     });
+
+    page.addBlade({ view: 'separator' });
+
+    page.addButton({ title: '💾 Export State' }).on('click', () => this.onExportState?.());
+    page.addButton({ title: '📂 Import State' }).on('click', () => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.json,application/json';
+      input.addEventListener('change', () => {
+        const file = input.files?.[0];
+        if (!file) return;
+        void file.text().then(text => this.onImportState?.(text));
+      });
+      input.click();
+    });
+    page.addButton({ title: '⏪ Load Autosave' }).on('click', () => this.onLoadAutosave?.());
   }
 
   // ---------------------------------------------------------------------------
