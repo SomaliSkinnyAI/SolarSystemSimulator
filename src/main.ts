@@ -8,6 +8,8 @@ import { computeBodiesFromHorizonsCache } from './data/horizonsEphemeris';
 import { scanSystemEvents } from './utils/EventPredictor';
 import { CelestialBody } from './physics/CelestialBody';
 import { selectOccluders, updateEclipseUniforms } from './rendering/EclipseShadows';
+import { CometTail } from './rendering/CometTail';
+import { AU } from './utils/MathUtils';
 import { PhysicsEngine } from './physics/PhysicsEngine';
 import { SceneManager } from './rendering/SceneManager';
 import { TrailRenderer } from './rendering/TrailRenderer';
@@ -385,6 +387,10 @@ let eventPanelTimer = 1;
 const occluderMap = new Map<string, CelestialBody[]>();
 let eclipseFrameCounter = 30;
 
+// Halley's dust + ion tails
+const cometTail = new CometTail(scene);
+const cometVelDir = new THREE.Vector3();
+
 function animate(): void {
   requestAnimationFrame(animate);
 
@@ -508,6 +514,24 @@ function animate(): void {
   // --- Solar wind ---
   if (renderConfig.showSolarWind) {
     sceneManager.updateSolarWind(wallDt);
+  }
+
+  // --- Asteroid belt orbital clock ---
+  sceneManager.updateAsteroidBelt(simTimeElapsed);
+
+  // --- Comet tails (Halley) ---
+  {
+    const halley = bodies.find(b => b.state.id === 'halley');
+    if (halley && sun) {
+      const distAU = halley.state.position.distanceTo(sun.state.position) / AU;
+      cometVelDir.copy(halley.state.velocity).normalize();
+      cometTail.update(
+        halley.group.position, sun.group.position,
+        cometVelDir, distAU, wallDt, !renderConfig.logScale
+      );
+    } else {
+      cometTail.update(new THREE.Vector3(), new THREE.Vector3(), cometVelDir, 100, wallDt, false);
+    }
   }
 
   // --- Gravity field ---
